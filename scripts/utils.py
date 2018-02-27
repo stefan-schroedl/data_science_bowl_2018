@@ -5,8 +5,11 @@ Takes only 200 seconds to process 5635 mask files
 '''
 
 import numpy as np
-from PIL import Image
 import os
+import skimage
+from skimage.io import imread
+from matplotlib import _cntr as cntr
+import matplotlib.pyplot as plt
 
 # RLE encoding
 
@@ -58,23 +61,27 @@ def prob_to_rles(x, cut_off = 0.5):
 
 ## Eval metrics
 
-def precision_at(threshold, iou):
-    matches = iou > threshold
-    true_positives = np.sum(matches, axis=1) == 1   # Correct objects
-    false_positives = np.sum(matches, axis=0) == 0  # Missed objects
-    false_negatives = np.sum(matches, axis=1) == 0  # Extra objects
-    tp, fp, fn = np.sum(true_positives), np.sum(false_positives), np.sum(false_negatives)
-    return tp, fp, fn
+def precision(matches):
+    matches = matches.astype(int)
+    true_positives = (np.sum(matches, axis=1) == 1).astype(int)   # Correct objects
+    false_positives = (np.sum(matches, axis=0) == 0).astype(int)  # Extra objects
+    false_negatives = (np.sum(matches, axis=1) == 0).astype(int)  # Missed objects
+    over_seg = (np.sum(matches, axis=1) > 1).astype(int)   # Objects predicted multiple times
+    under_seg = (np.sum(matches, axis=0) > 1).astype(int)   # Predictions overlapping multiple objects
+    tp, fp, fn, oseg, useg = (np.sum(true_positives), np.sum(false_positives), np.sum(false_negatives),
+       np.sum(over_seg), np.sum(under_seg))
+    return tp, fp, fn, oseg, useg
 
-def iou_metric(y_true_in, y_pred_in, print_table=False):
-    labels = y_true_in
-    y_pred = y_pred_in
+def union_intersection(labels, y_pred, exclude_bg=True):
 
     true_objects = len(np.unique(labels))
     pred_objects = len(np.unique(y_pred))
-
+    
     intersection = np.histogram2d(labels.flatten(), y_pred.flatten(), bins=(true_objects, pred_objects))[0]
 
+    #np.set_printoptions(threshold=np.nan)
+    #print intersection
+    
     # Compute areas (needed for finding the union between all objects)
     area_true = np.histogram(labels, bins = true_objects)[0]
     area_pred = np.histogram(y_pred, bins = pred_objects)[0]
@@ -83,25 +90,39 @@ def iou_metric(y_true_in, y_pred_in, print_table=False):
 
     # Compute union
     union = area_true + area_pred - intersection
-
-    # Exclude background from the analysis
-    intersection = intersection[1:,1:]
-    union = union[1:,1:]
+    
+    if exclude_bg:
+        # Exclude background from the analysis
+        intersection = intersection[1:,1:]
+        union = union[1:,1:]
+        area_true = area_true[1:,]
+        area_pred = area_pred[:,1:]
+        
     union[union == 0] = 1e-9
 
+
+
+    return union, intersection, area_true, area_pred
+
+
+def iou_metric(labels, y_pred, print_table=False):
+
+    union, intersection, _, _ = union_intersection(labels, y_pred)
+    
     # Compute the intersection over union
-    iou = intersection / union
+    iou = intersection.astype(float) / union
 
     # Loop over IoU thresholds
     prec = []
     if print_table:
         print("Thresh\tTP\tFP\tFN\tPrec.")
     for t in np.arange(0.5, 1.0, 0.05):
-        tp, fp, fn = precision_at(t, iou)
+        tp, fp, fn, _, _ = precision(iou > t)
+            
         if (tp + fp + fn) > 0:
-            p = tp / (tp + fp + fn)
+            p = 1.0 * tp / (tp + fp + fn)
         else:
-            p = 0
+            p = 0.0
         if print_table:
             print("{:1.3f}\t{}\t{}\t{}\t{:1.3f}".format(t, tp, fp, fn, p))
         prec.append(p)
@@ -111,5 +132,137 @@ def iou_metric(y_true_in, y_pred_in, print_table=False):
     return np.mean(prec)
 
 
+# see the SDS paper
+def diagnose_errors(labels, y_pred, threshold=.5, print_message=True):
+
+    union, intersection, area_true, area_pred = union_intersection(labels, y_pred)
+
+    # Compute the intersection over union
+    iou = intersection.astype(float) / union
+
+    matches = (iou > threshold).astype(int)
+    tp, fp, fn, oseg, useg = precision(matches)
+
+    denom = 1.0 * (tp + fp + fn)
+    p = 0.0
+    oseg = 0.0
+    useg = 0.0
+    p_loc = 0.0
+    
+    if denom > 0:
+        p = tp / denom
+        oseg = oseg / denom
+        useg = useg / denom
+
+    # what can be achieved with locations fixed?
+    matches0 = (iou > 0.1).astype(int)
+
+    matches_loc = np.copy(matches)
+    idx_bool = np.any(matches0 > matches, axis=1)
+    if np.any(idx_bool):
+        idx = np.where(idx_bool)
+        # pretend perfect match, and remove duplicates
+    
+        matches_loc[idx, :] = 0
+
+        for i in np.nditer(idx):
+            matches_loc[i,(np.where(matches0[i, :] > matches[i, :]))[0][0]] = 1
+
+    
+    tp_loc, fp_loc, fn_loc, _, _ = precision(matches_loc)
+    #print 'loc', tp_loc, fp_loc, fn_loc
+    #np.set_printoptions(threshold=np.nan)
+    #print iou
+    #print np.sum(matches,axis=0)
+    #print np.sum(matches,axis=1)
+    #print matches_loc[:,23]
+    
+    if denom > 0:
+        p_loc = tp_loc / denom
+
+    # precision measure
+    prec = intersection.astype(float) / np.tile(area_pred, (intersection.shape[0], 1))
+    tp_prec, fp_prec, fn_prec, _, _ = precision(prec > threshold)
+    if (tp_prec + fp_prec + fn_prec) > 0:
+        p_prec = 1.0 * tp_prec / (tp_prec + fp_prec + fn_prec)
+    else:
+        p_prec = 0.0
+
+    # recall measure
+    rec = intersection.astype(float) / np.tile(area_true, (1, intersection.shape[1]))
+    tp_rec, fp_rec, fn_rec, _, _ = precision(rec > threshold)
+    if (tp_rec + fp_rec + fn_rec) > 0:
+        p_rec = 1.0 * tp_rec / (tp_rec + fp_rec + fn_rec)
+    else:
+        p_rec = 0.0
+
+    if print_message:
+        s = 'average precision: %.3f; ignoring mislocations: %.3f; oversegmentation: %.3f; undersegmentation: %.3f' % (p, p_loc, oseg, useg)
+        if p_prec > p_rec:
+            s = s + ' segments tend to be too small:'
+        else:
+            s = s + ' segments tend to be too large:'
+        s = s + ' precision: %.3f, recall: %.3f' % (p_prec, p_rec)
+        print(s)
+
+    return p, p_loc, p_prec, p_rec, oseg, useg
+
+
+def read_img_join_masks(img_id, root='../../input/stage1_train/'):
+    img = imread(os.path.join(root, img_id, 'images', img_id + '.png'))
+    path = os.path.join(root, img_id, 'masks')
+    mask = None
+    i = 0
+    for mask_file in next(os.walk(path))[2]:
+        if mask_file.endswith('png'):
+            i = i + 1
+            mask_ = imread(os.path.join(path, mask_file)).astype(int)
+            mask_[mask_>0] = i
+            if mask is None:
+                mask = mask_
+            else:
+                mask = np.maximum(mask, mask_)
+    return img, mask
+
+# https://stackoverflow.com/questions/18304722/python-find-contour-lines-from-matplotlib-pyplot-contour
+# add contour to plot, without directly plotting!
+def add_contour(z, ax):
+
+    x, y = np.mgrid[:z.shape[0], :z.shape[1]]
+    c = cntr.Cntr(x, y, z)
+
+    # trace a contour at z == 0.5
+    for at in range(1, np.amax(z)+1):
+        res = c.trace(at)
+
+        # result is a list of arrays of vertices and path codes
+        # (see docs for matplotlib.path.Path)
+        nseg = len(res) // 2
+        segments, codes = res[:nseg], res[nseg:]
+
+        for seg in segments:
+            # for some reason, the coordinates are flipped???
+            p = plt.Polygon([[x[1],x[0]] for x in seg], fill=False, color='black')
+            ax.add_artist(p)
+
+def show_img(img):
+    fig, ax = plt.subplots(1, 1, figsize=(16, 16))
+    ax.grid(None)
+    ax.imshow(img)
+    plt.tight_layout()
+    plt.show()
+
+    
+def show_with_contour(img, mask):
+    fig, ax = plt.subplots(1, 1, figsize=(16, 16))
+    ax.grid(None)
+    ax.imshow(img)
+    add_contour(mask, ax)
+    plt.tight_layout()
+    plt.xticks([])
+    plt.yticks([])
+    plt.show()
+
 if __name__ == '__main__':
     check_encoding()
+   
