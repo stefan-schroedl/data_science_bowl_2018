@@ -145,67 +145,81 @@ def diagnose_errors(labels, y_pred, threshold=.5, print_message=True):
 
     denom = 1.0 * (tp + fp + fn)
     p = 0.0
-    oseg = 0.0
-    useg = 0.0
     p_loc = 0.0
     
     if denom > 0:
         p = tp / denom
         oseg = oseg / denom
         useg = useg / denom
+    else:
+        oseg = 0.0
+        useg = 0.0
 
     # what can be achieved with locations fixed?
-    matches0 = (iou > 0.1).astype(int)
 
+    # sort newly matched indices by iou
     matches_loc = np.copy(matches)
-    idx_bool = np.any(matches0 > matches, axis=1)
-    if np.any(idx_bool):
-        idx = np.where(idx_bool)
-        # pretend perfect match, and remove duplicates
-    
-        matches_loc[idx, :] = 0
+    matches0 = np.where(np.logical_and(iou > 0.1, iou < threshold))
+    matches0 = sorted([(x,y,iou[x,y]) for x,y in zip(matches0[0], matches0[1])], key = lambda x: -x[2])
 
-        for i in np.nditer(idx):
-            matches_loc[i,(np.where(matches0[i, :] > matches[i, :]))[0][0]] = 1
-
+    for x,y,_ in matches0:
+        if np.sum(matches_loc[x,:]) == 0 and np.sum(matches_loc[:,y]) == 0:
+            # both parts of the pair have not been matched, assign greedily
+            #print 'assigning', x, y
+            matches_loc[x,y]=1.0
     
     tp_loc, fp_loc, fn_loc, _, _ = precision(matches_loc)
     #print 'loc', tp_loc, fp_loc, fn_loc
+                
     #np.set_printoptions(threshold=np.nan)
     #print iou
     #print np.sum(matches,axis=0)
     #print np.sum(matches,axis=1)
     #print matches_loc[:,23]
-    
+
+    denom = 1.0 * (tp_loc + fp_loc + fn_loc)
     if denom > 0:
         p_loc = tp_loc / denom
 
+    prec_thresh = 0.67
+    
     # precision measure
     prec = intersection.astype(float) / np.tile(area_pred, (intersection.shape[0], 1))
-    tp_prec, fp_prec, fn_prec, _, _ = precision(prec > threshold)
-    if (tp_prec + fp_prec + fn_prec) > 0:
-        p_prec = 1.0 * tp_prec / (tp_prec + fp_prec + fn_prec)
-    else:
-        p_prec = 0.0
+
+    #tp_prec, fp_prec, fn_prec, _, _ = precision(prec > prec_thresh)
+    #print 'prec',  tp_prec, fp_prec, fn_prec
+    #denom = 1.0 * (tp_prec + fp_prec + fn_prec)
+    #if denom > 0:
+    #    p_prec = tp_prec / denom
+    #else:
+    #    p_prec = 0.0
 
     # recall measure
     rec = intersection.astype(float) / np.tile(area_true, (1, intersection.shape[1]))
-    tp_rec, fp_rec, fn_rec, _, _ = precision(rec > threshold)
-    if (tp_rec + fp_rec + fn_rec) > 0:
-        p_rec = 1.0 * tp_rec / (tp_rec + fp_rec + fn_rec)
-    else:
-        p_rec = 0.0
 
+    # this leads to duplicates, not sure how to handle it properly ...
+    #tp_rec, fp_rec, fn_rec, _, _ = precision(rec > prec_thresh)
+    #print 'rec',  tp_rec, fp_rec, fn_rec
+     
+    #denom = 1.0 * (tp_rec + fp_rec + fn_rec)
+    #if denom > 0:
+    #    p_rec = tp_rec / denom
+    #else:
+    #    p_rec = 0.0
+
+    mean_prec = np.mean(prec[(iou > threshold)])
+    mean_rec = np.mean(rec[(iou > threshold)])
+    
     if print_message:
         s = 'average precision: %.3f; ignoring mislocations: %.3f; oversegmentation: %.3f; undersegmentation: %.3f' % (p, p_loc, oseg, useg)
-        if p_prec > p_rec:
+        if mean_prec > mean_rec:
             s = s + ' segments tend to be too small:'
         else:
             s = s + ' segments tend to be too large:'
-        s = s + ' precision: %.3f, recall: %.3f' % (p_prec, p_rec)
+        s = s + ' pixel precision: %.3f, pixel recall: %.3f' % (mean_prec, mean_rec)
         print(s)
 
-    return p, p_loc, p_prec, p_rec, oseg, useg
+    return p, p_loc, mean_prec, mean_rec, oseg, useg
 
 
 def read_img_join_masks(img_id, root='../../input/stage1_train/'):
