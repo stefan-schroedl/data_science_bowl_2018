@@ -66,11 +66,8 @@ def precision(matches):
     true_positives = (np.sum(matches, axis=1) == 1).astype(int)   # Correct objects
     false_positives = (np.sum(matches, axis=0) == 0).astype(int)  # Extra objects
     false_negatives = (np.sum(matches, axis=1) == 0).astype(int)  # Missed objects
-    over_seg = (np.sum(matches, axis=1) > 1).astype(int)   # Objects predicted multiple times
-    under_seg = (np.sum(matches, axis=0) > 1).astype(int)   # Predictions overlapping multiple objects
-    tp, fp, fn, oseg, useg = (np.sum(true_positives), np.sum(false_positives), np.sum(false_negatives),
-       np.sum(over_seg), np.sum(under_seg))
-    return tp, fp, fn, oseg, useg
+    tp, fp, fn = np.sum(true_positives), np.sum(false_positives), np.sum(false_negatives)
+    return tp, fp, fn
 
 def union_intersection(labels, y_pred, exclude_bg=True):
 
@@ -117,7 +114,7 @@ def iou_metric(labels, y_pred, print_table=False):
     if print_table:
         print("Thresh\tTP\tFP\tFN\tPrec.")
     for t in np.arange(0.5, 1.0, 0.05):
-        tp, fp, fn, _, _ = precision(iou > t)
+        tp, fp, fn = precision(iou > t)
             
         if (tp + fp + fn) > 0:
             p = 1.0 * tp / (tp + fp + fn)
@@ -132,13 +129,22 @@ def iou_metric(labels, y_pred, print_table=False):
     return np.mean(prec)
 
 
-def print_diag(p, p_loc, mean_prec, mean_rec, oseg, useg):
-    s = 'average precision: %.3f; ignoring mislocations: %.3f; oversegmentation: %.3f; undersegmentation: %.3f' % (p, p_loc, oseg, useg)
+def print_diag(p, p_loc, mean_prec, mean_rec, missed_rate, extra_rate, oseg, useg):
+    s = 'average precision: %.1f %%; ignoring mislocations: %.1f %%;' % (100*p, 100*p_loc)
+    if missed_rate > 0.0:
+        s = s + ' missed %.1f %% of positives;' % (100.0 * missed_rate)
+    if extra_rate > 0.0:
+        s = s + ' predicted %.1f %% false positives;' % (100.0 * extra_rate)
+    if oseg > 0.0:
+        s = s + '  %.1f %% of objects predicted multiple times;' % (100.0 * oseg)
+    if useg > 0.0:
+        s = s + '  %.1f %% of predictions cover multiple objecs;' % (100.0 * useg)
+
     if mean_prec > mean_rec:
         s = s + ' segments tend to be too small:'
     else:
         s = s + ' segments tend to be too large:'
-    s = s + ' pixel precision: %.3f, pixel recall: %.3f' % (mean_prec, mean_rec)
+    s = s + ' pixel precision: %.1f %%, pixel recall: %.1f %%' % (100.0 * mean_prec, 100.0 * mean_rec)
     print(s)
 
 
@@ -151,26 +157,32 @@ def diagnose_errors(labels, y_pred, threshold=.5, print_message=True):
     iou = intersection.astype(float) / union
 
     matches = (iou > threshold).astype(int)
-    tp, fp, fn, oseg, useg = precision(matches)
+    tp, fp, fn = precision(matches)
 
-    denom = 1.0 * (tp + fp + fn)
     p = 0.0
     p_loc = 0.0
-    
+
+    denom = 1.0 * (tp + fp + fn)
     if denom > 0:
         p = tp / denom
-        oseg = oseg / denom
-        useg = useg / denom
-    else:
-        oseg = 0.0
-        useg = 0.0
 
     # what can be achieved with locations fixed?
 
     # sort newly matched indices by iou
     matches_loc = np.copy(matches)
-    matches0 = np.where(np.logical_and(iou > 0.1, iou < threshold))
+
+    matches0 = np.where(iou > 0.1)
     matches0 = sorted([(x,y,iou[x,y]) for x,y in zip(matches0[0], matches0[1])], key = lambda x: -x[2])
+
+    missed_rate = np.sum((np.sum(((iou > 0.1).astype(int)), axis=1) == 0).astype(int))
+    extra_rate = np.sum((np.sum(((iou > 0.1).astype(int)), axis=0) == 0).astype(int))
+
+    denom = 1.0 * (tp + fn)
+    if denom > 0:
+        missed_rate = missed_rate / denom
+    denom = 1.0 * (tp + fp)
+    if denom > 0:
+        extra_rate = extra_rate / denom
 
     for x,y,_ in matches0:
         if np.sum(matches_loc[x,:]) == 0 and np.sum(matches_loc[:,y]) == 0:
@@ -178,51 +190,41 @@ def diagnose_errors(labels, y_pred, threshold=.5, print_message=True):
             #print 'assigning', x, y
             matches_loc[x,y]=1.0
     
-    tp_loc, fp_loc, fn_loc, _, _ = precision(matches_loc)
-    #print 'loc', tp_loc, fp_loc, fn_loc
-                
-    #np.set_printoptions(threshold=np.nan)
-    #print iou
-    #print np.sum(matches,axis=0)
-    #print np.sum(matches,axis=1)
-    #print matches_loc[:,23]
+    tp_loc, fp_loc, fn_loc = precision(matches_loc)
 
     denom = 1.0 * (tp_loc + fp_loc + fn_loc)
     if denom > 0:
         p_loc = tp_loc / denom
 
+
     prec_thresh = 0.67
     
     # precision measure
-    prec = intersection.astype(float) / np.tile(area_pred, (intersection.shape[0], 1))
+    prec = intersection.astype(float) / np.tile(area_pred, (intersection.shape[0], 1))        
+    oseg = np.sum((np.sum(prec>prec_thresh, axis=1) > 1).astype(int)) # Objects predicted multiple times
+    
 
-    #tp_prec, fp_prec, fn_prec, _, _ = precision(prec > prec_thresh)
-    #print 'prec',  tp_prec, fp_prec, fn_prec
-    #denom = 1.0 * (tp_prec + fp_prec + fn_prec)
-    #if denom > 0:
-    #    p_prec = tp_prec / denom
-    #else:
-    #    p_prec = 0.0
+    denom = 1.0 * (tp + fn)
+    if denom > 0:
+        oseg = oseg / denom
+    else:
+        oseg = 0.0
 
+    
     # recall measure
     rec = intersection.astype(float) / np.tile(area_true, (1, intersection.shape[1]))
+    useg = np.sum((np.sum((rec>prec_thresh).astype(int), axis=0) > 1).astype(int))   # Predictions overlapping multiple objects
+    denom = 1.0 * (tp + fp)
+    if denom > 0:
+        useg = useg / denom
 
-    # this leads to duplicates, not sure how to handle it properly ...
-    #tp_rec, fp_rec, fn_rec, _, _ = precision(rec > prec_thresh)
-    #print 'rec',  tp_rec, fp_rec, fn_rec
-     
-    #denom = 1.0 * (tp_rec + fp_rec + fn_rec)
-    #if denom > 0:
-    #    p_rec = tp_rec / denom
-    #else:
-    #    p_rec = 0.0
-
+    # pixel precision and recall for existing match
     mean_prec = np.mean(prec[(iou > threshold)])
     mean_rec = np.mean(rec[(iou > threshold)])
 
     if print_message:
-        print_diag(p, p_loc, mean_prec, mean_rec, oseg, useg)
-    return p, p_loc, mean_prec, mean_rec, oseg, useg
+        print_diag(p, p_loc, mean_prec, mean_rec, missed_rate, extra_rate, oseg, useg)
+    return p, p_loc, mean_prec, mean_rec, missed_rate, extra_rate, oseg, useg
 
 
 def read_img_join_masks(img_id, root='../../input/stage1_train/'):
