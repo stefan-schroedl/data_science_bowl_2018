@@ -132,6 +132,16 @@ def iou_metric(labels, y_pred, print_table=False):
     return np.mean(prec)
 
 
+def print_diag(p, p_loc, mean_prec, mean_rec, oseg, useg):
+    s = 'average precision: %.3f; ignoring mislocations: %.3f; oversegmentation: %.3f; undersegmentation: %.3f' % (p, p_loc, oseg, useg)
+    if mean_prec > mean_rec:
+        s = s + ' segments tend to be too small:'
+    else:
+        s = s + ' segments tend to be too large:'
+    s = s + ' pixel precision: %.3f, pixel recall: %.3f' % (mean_prec, mean_rec)
+    print(s)
+
+
 # see the SDS paper
 def diagnose_errors(labels, y_pred, threshold=.5, print_message=True):
 
@@ -209,16 +219,9 @@ def diagnose_errors(labels, y_pred, threshold=.5, print_message=True):
 
     mean_prec = np.mean(prec[(iou > threshold)])
     mean_rec = np.mean(rec[(iou > threshold)])
-    
-    if print_message:
-        s = 'average precision: %.3f; ignoring mislocations: %.3f; oversegmentation: %.3f; undersegmentation: %.3f' % (p, p_loc, oseg, useg)
-        if mean_prec > mean_rec:
-            s = s + ' segments tend to be too small:'
-        else:
-            s = s + ' segments tend to be too large:'
-        s = s + ' pixel precision: %.3f, pixel recall: %.3f' % (mean_prec, mean_rec)
-        print(s)
 
+    if print_message:
+        print_diag(p, p_loc, mean_prec, mean_rec, oseg, useg)
     return p, p_loc, mean_prec, mean_rec, oseg, useg
 
 
@@ -240,7 +243,7 @@ def read_img_join_masks(img_id, root='../../input/stage1_train/'):
 
 # https://stackoverflow.com/questions/18304722/python-find-contour-lines-from-matplotlib-pyplot-contour
 # add contour to plot, without directly plotting!
-def add_contour(z, ax):
+def add_contour(z, ax, color='black'):
 
     x, y = np.mgrid[:z.shape[0], :z.shape[1]]
     c = cntr.Cntr(x, y, z)
@@ -256,7 +259,7 @@ def add_contour(z, ax):
 
         for seg in segments:
             # for some reason, the coordinates are flipped???
-            p = plt.Polygon([[x[1],x[0]] for x in seg], fill=False, color='black')
+            p = plt.Polygon([[x[1],x[0]] for x in seg], fill=False, color=color)
             ax.add_artist(p)
 
 def show_img(img):
