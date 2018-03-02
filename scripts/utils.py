@@ -4,9 +4,11 @@ Fast inplementation of Run-Length Encoding algorithm
 Takes only 200 seconds to process 5635 mask files
 '''
 
+import math
 import numpy as np
 import os
 import skimage
+from skimage import img_as_float, exposure
 from skimage.io import imread
 from matplotlib import _cntr as cntr
 import matplotlib.pyplot as plt
@@ -61,24 +63,27 @@ def prob_to_rles(x, cut_off = 0.5):
 
 ## Eval metrics
 
-def precision(matches):
-    matches = matches.astype(int)
-    true_positives = (np.sum(matches, axis=1) == 1).astype(int)   # Correct objects
-    false_positives = (np.sum(matches, axis=0) == 0).astype(int)  # Extra objects
-    false_negatives = (np.sum(matches, axis=1) == 0).astype(int)  # Missed objects
+def precision_at(overlap, thresh):
+    matches = (overlap > thresh).astype(int)
+    matches_by_pred = np.sum(matches, axis=0)
+    matches_by_target = np.sum(matches, axis=1)
+    true_positives = (matches_by_target == 1).astype(int)   # Correct objects
+    false_positives = (matches_by_pred == 0).astype(int)  # Extra objects
+    false_negatives = (matches_by_target == 0).astype(int)  # Missed objects
     tp, fp, fn = np.sum(true_positives), np.sum(false_positives), np.sum(false_negatives)
-    return tp, fp, fn
+    return tp, fp, fn, matches_by_pred, matches_by_target
+
 
 def union_intersection(labels, y_pred, exclude_bg=True):
 
     true_objects = len(np.unique(labels))
     pred_objects = len(np.unique(y_pred))
-    
+
     intersection = np.histogram2d(labels.flatten(), y_pred.flatten(), bins=(true_objects, pred_objects))[0]
 
     #np.set_printoptions(threshold=np.nan)
     #print intersection
-    
+
     # Compute areas (needed for finding the union between all objects)
     area_true = np.histogram(labels, bins = true_objects)[0]
     area_pred = np.histogram(y_pred, bins = pred_objects)[0]
@@ -87,14 +92,14 @@ def union_intersection(labels, y_pred, exclude_bg=True):
 
     # Compute union
     union = area_true + area_pred - intersection
-    
+
     if exclude_bg:
         # Exclude background from the analysis
         intersection = intersection[1:,1:]
         union = union[1:,1:]
         area_true = area_true[1:,]
         area_pred = area_pred[:,1:]
-        
+
     union[union == 0] = 1e-9
 
 
@@ -105,7 +110,7 @@ def union_intersection(labels, y_pred, exclude_bg=True):
 def iou_metric(labels, y_pred, print_table=False):
 
     union, intersection, _, _ = union_intersection(labels, y_pred)
-    
+
     # Compute the intersection over union
     iou = intersection.astype(float) / union
 
@@ -114,8 +119,8 @@ def iou_metric(labels, y_pred, print_table=False):
     if print_table:
         print("Thresh\tTP\tFP\tFN\tPrec.")
     for t in np.arange(0.5, 1.0, 0.05):
-        tp, fp, fn = precision(iou > t)
-            
+        tp, fp, fn, _, _ = precision_at(iou, t)
+
         if (tp + fp + fn) > 0:
             p = 1.0 * tp / (tp + fp + fn)
         else:
@@ -130,7 +135,7 @@ def iou_metric(labels, y_pred, print_table=False):
 
 
 def print_diag(p, p_loc, mean_prec, mean_rec, missed_rate, extra_rate, oseg, useg):
-    s = 'average precision: %.1f %%; ignoring mislocations: %.1f %%;' % (100*p, 100*p_loc)
+    s = 'average precision: %.1f %%; max score improvment without mislocations: %.1f %%;' % (100*p, 100*p_loc)
     if missed_rate > 0.0:
         s = s + ' missed %.1f %% of positives;' % (100.0 * missed_rate)
     if extra_rate > 0.0:
@@ -138,7 +143,7 @@ def print_diag(p, p_loc, mean_prec, mean_rec, missed_rate, extra_rate, oseg, use
     if oseg > 0.0:
         s = s + '  %.1f %% of objects predicted multiple times;' % (100.0 * oseg)
     if useg > 0.0:
-        s = s + '  %.1f %% of predictions cover multiple objecs;' % (100.0 * useg)
+        s = s + '  %.1f %% of predictions covering multiple objects;' % (100.0 * useg)
 
     if mean_prec > mean_rec:
         s = s + ' segments tend to be too small:'
@@ -148,7 +153,7 @@ def print_diag(p, p_loc, mean_prec, mean_rec, missed_rate, extra_rate, oseg, use
     print(s)
 
 
-# see the SDS paper
+# see the SDS paper for motivation and discussion
 def diagnose_errors(labels, y_pred, threshold=.5, print_message=True):
 
     union, intersection, area_true, area_pred = union_intersection(labels, y_pred)
@@ -156,67 +161,50 @@ def diagnose_errors(labels, y_pred, threshold=.5, print_message=True):
     # Compute the intersection over union
     iou = intersection.astype(float) / union
 
-    matches = (iou > threshold).astype(int)
-    tp, fp, fn = precision(matches)
-
-    p = 0.0
-    p_loc = 0.0
+    tp, fp, fn, matches_by_pred, matches_by_target = precision_at(iou, threshold)
 
     denom = 1.0 * (tp + fp + fn)
-    if denom > 0:
-        p = tp / denom
+    if denom <= 0:
+        return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
-    # what can be achieved with locations fixed?
+    p = tp / denom
+
+    # what is the best possible score when loosely overlapping locations were fixed?
 
     # sort newly matched indices by iou
-    matches_loc = np.copy(matches)
-
+    # assign less stringent matches greedily if both pred and target haven't been matched
     matches0 = np.where(iou > 0.1)
     matches0 = sorted([(x,y,iou[x,y]) for x,y in zip(matches0[0], matches0[1])], key = lambda x: -x[2])
 
-    missed_rate = np.sum((np.sum(((iou > 0.1).astype(int)), axis=1) == 0).astype(int))
-    extra_rate = np.sum((np.sum(((iou > 0.1).astype(int)), axis=0) == 0).astype(int))
-
-    denom = 1.0 * (tp + fn)
-    if denom > 0:
-        missed_rate = missed_rate / denom
-    denom = 1.0 * (tp + fp)
-    if denom > 0:
-        extra_rate = extra_rate / denom
-
+    iou_loc = np.copy(iou)
     for x,y,_ in matches0:
-        if np.sum(matches_loc[x,:]) == 0 and np.sum(matches_loc[:,y]) == 0:
-            # both parts of the pair have not been matched, assign greedily
-            #print 'assigning', x, y
-            matches_loc[x,y]=1.0
-    
-    tp_loc, fp_loc, fn_loc = precision(matches_loc)
+        if matches_by_target[x] == 0 and matches_by_pred[y] == 0 and iou[x,y] >= np.max(iou[x,:]):
+            iou_loc[:,y] = 0.0
+            iou_loc[x,y] = 1.0
+            matches_by_target[x] = 1
+            matches_by_pred[y] = 1
 
-    denom = 1.0 * (tp_loc + fp_loc + fn_loc)
-    if denom > 0:
-        p_loc = tp_loc / denom
+    tp_loc, fp_loc, fn_loc, matches_by_pred_loc, matches_by_target_loc = precision_at(iou_loc, threshold)
 
+    p_loc = 0.0
+    denom_loc = 1.0 * (tp_loc + fp_loc + fn_loc)
+    if denom_loc > 0:
+        p_loc = tp_loc / denom_loc - p
+
+    missed_rate = np.sum((np.sum(((iou > 0.1).astype(int)), axis=1) == 0).astype(int)) / denom
+    extra_rate = np.sum((np.sum(((iou > 0.1).astype(int)), axis=0) == 0).astype(int)) / denom
 
     prec_thresh = 0.67
-    
+
     # precision measure
-    prec = intersection.astype(float) / np.tile(area_pred, (intersection.shape[0], 1))        
-    oseg = np.sum((np.sum(prec>prec_thresh, axis=1) > 1).astype(int)) # Objects predicted multiple times
-    
+    prec = intersection.astype(float) / np.tile(area_pred, (intersection.shape[0], 1))
+    # Objects predicted multiple times
+    oseg = np.sum((np.sum(prec>prec_thresh, axis=1) > 1).astype(int))  / denom
 
-    denom = 1.0 * (tp + fn)
-    if denom > 0:
-        oseg = oseg / denom
-    else:
-        oseg = 0.0
-
-    
     # recall measure
     rec = intersection.astype(float) / np.tile(area_true, (1, intersection.shape[1]))
-    useg = np.sum((np.sum((rec>prec_thresh).astype(int), axis=0) > 1).astype(int))   # Predictions overlapping multiple objects
-    denom = 1.0 * (tp + fp)
-    if denom > 0:
-        useg = useg / denom
+    # Predictions overlapping multiple objects
+    useg = np.sum((np.sum((rec>prec_thresh).astype(int), axis=0) > 1).astype(int)) / denom
 
     # pixel precision and recall for existing match
     mean_prec = np.mean(prec[(iou > threshold)])
@@ -264,14 +252,41 @@ def add_contour(z, ax, color='black'):
             p = plt.Polygon([[x[1],x[0]] for x in seg], fill=False, color=color)
             ax.add_artist(p)
 
+# display one or several images
 def show_img(img):
-    fig, ax = plt.subplots(1, 1, figsize=(16, 16))
-    ax.grid(None)
-    ax.imshow(img)
+    max_col = 3
+    if not isinstance(img, (tuple, list)):
+        img = [img]
+
+    l = len(img)
+    if l <= max_col:
+        ncol = l
+        nrow = 1
+    else:
+        ncol = max_col
+        nrow = int(math.ceil(1.0*l/ncol))
+
+    fig, ax = plt.subplots(nrow, ncol, figsize=(16, 16))
     plt.tight_layout()
+    for i in range(l):
+        if l == 1:
+            axi = ax
+        elif l <= max_col:
+            axi = ax[i]
+        else:
+            c = int(math.floor(1.0*i/ncol))
+            r = i - c * max_col
+            axi = ax[c,r]
+
+        axi.grid(None)
+        axi.imshow(img[i])
+    if l > max_col:
+        for i in range(l,max_col*int(math.ceil(1.0*l/max_col))):
+            c = int(math.floor(1.0*i/ncol))
+            r = i - c * max_col
+            ax[c,r].axis('off')
     plt.show()
 
-    
 def show_with_contour(img, mask):
     fig, ax = plt.subplots(1, 1, figsize=(16, 16))
     ax.grid(None)
@@ -282,6 +297,36 @@ def show_with_contour(img, mask):
     plt.yticks([])
     plt.show()
 
+# (copied from tutorial)
+def plot_img_and_hist(image, axes, bins=256):
+    """Plot an image along with its histogram and cumulative histogram.
+
+    """
+    image = img_as_float(image)
+    ax_img, ax_hist = axes
+    ax_cdf = ax_hist.twinx()
+
+    # Display image
+    ax_img.imshow(image, cmap=plt.cm.gray)
+    ax_img.set_axis_off()
+    ax_img.set_adjustable('box-forced')
+
+    # Display histogram
+    ax_hist.hist(image.ravel(), bins=bins, histtype='step', color='black')
+    ax_hist.ticklabel_format(axis='y', style='scientific', scilimits=(0, 0))
+    ax_hist.set_xlabel('Pixel intensity')
+    ax_hist.set_xlim(0, 1)
+    ax_hist.set_yticks([])
+    ax_hist.grid(None)
+
+    # Display cumulative distribution
+    img_cdf, bins = exposure.cumulative_distribution(image, bins)
+    ax_cdf.plot(bins, img_cdf, 'r')
+    ax_cdf.set_yticks([])
+
+    return ax_img, ax_hist, ax_cdf
+
 if __name__ == '__main__':
-    check_encoding()
-   
+    # check_encoding()
+    print 'hello'
+
