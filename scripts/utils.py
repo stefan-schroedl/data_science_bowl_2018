@@ -298,10 +298,15 @@ def show_with_contour(img, mask):
     plt.show()
 
 # (copied from tutorial)
-def plot_img_and_hist(image, axes, bins=256):
+def plot_img_and_hist(image, axes=None, bins=256):
     """Plot an image along with its histogram and cumulative histogram.
 
     """
+
+    if axes is None:
+        fig,axes = plt.subplots(1,2,figsize=(16, 16))
+        plt.tight_layout()
+
     image = img_as_float(image)
     ax_img, ax_hist = axes
     ax_cdf = ax_hist.twinx()
