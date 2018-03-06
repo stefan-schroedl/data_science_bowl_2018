@@ -6,7 +6,10 @@ import cv2
 from sklearn.neighbors import KNeighborsClassifier
 import sys
 
-normalize=False
+gauss_blur=True
+normalize=True
+similarity=False
+
 if len(sys.argv)!=3:
     print "%s train_dir test_dir"
     sys.exit(1)
@@ -42,7 +45,7 @@ def load_mask(d):
             im=np.zeros(im_cur.shape[:2])
         im=np.maximum(im,im_cur[:,:,0])
     im=im.reshape(im.shape[0],im.shape[1],1)
-    l=cv2.Laplacian(im,cv2.CV_64F)
+    l=cv2.Laplacian(im,cv2.CV_64F,ksize=3)
     l=l.reshape(l.shape[0],l.shape[1],1)
     return im,l
 
@@ -50,18 +53,18 @@ read_imgs=[]
 test_img=None
 all_patches=[]
 all_patches3=[]
-pz=9
+pz=13
 patch_size=(pz,pz)
 for k in train_d:
     d=train_d[k]
-    _,mask=load_mask(d)
+    mask,boundary=load_mask(d)
     im = cv2.imread(d['img'])
     if len(all_patches)>100: # stop reading after the 100th image, and test on the 101st image
     	test_img=d
         break
-    im = np.concatenate((im,mask),axis=2)
+    im = np.concatenate((im,mask,boundary,np.maximum(mask/2,boundary)),axis=2)
     read_imgs.append(d['img'])
-    data_patches = extract_patches_2d(im, patch_size,random_state=1000,max_patches=1000).astype(np.float64) # only take 1000 patches from each image
+    data_patches = extract_patches_2d(im, patch_size,random_state=1000,max_patches=100).astype(np.float64) # only take 1000 patches from each image
     #lets store the 4D data , RGB+Mask and also the RGB seperately , RGB is used for KNN lookup
     data = data_patches.copy().reshape(data_patches.shape[0], -1)
     all_patches.append(data)
@@ -105,6 +108,12 @@ print "Running KNN lookup"
 im_patches=im_patches.reshape(im_patches.shape[0],-1)
 nearest_wds=neigh.kneighbors(im_patches, return_distance=True)
 
+gkernel=cv2.getGaussianKernel(ksize=pz,sigma=1)
+gkernel=gkernel*gkernel.T
+gkernel=gkernel.reshape(pz,pz,1)
+gkernel=np.concatenate((gkernel,gkernel,gkernel,gkernel,gkernel,gkernel),axis=2)
+gkernel=gkernel.reshape(-1)
+
 knn_patches=np.array([])
 for x in xrange(im_patches.shape[0]):
     idxs=nearest_wds[1][x]
@@ -113,20 +122,32 @@ for x in xrange(im_patches.shape[0]):
     new_patch=data[idxs].mean(axis=0)
     
     #use similarity
-    #distances=nearest_wds[0][x]
-    #similarity=1.0/distances
-    #similarity/=similarity.sum()
-    #new_patch=(data[idxs]*similarity[:,np.newaxis]).sum(axis=0)
+    if similarity:
+        distances=nearest_wds[0][x]
+        similarity=1.0/distances
+        similarity/=similarity.sum()
+        new_patch=(data[idxs]*similarity[:,np.newaxis]).sum(axis=0)
+
+    #gaussian spread
+    if gauss_blur:
+        new_patch=np.multiply(new_patch,gkernel)
 
     if knn_patches.ndim==1:
         knn_patches=np.zeros((im_patches.shape[0],new_patch.shape[0]))
     knn_patches[x]=new_patch
 
 print "Reconstructing"
-knn_patches = knn_patches.reshape(knn_patches.shape[0], *(pz,pz,4)).astype(np.uint8)
-reconstructed = reconstruct_from_patches_2d( knn_patches, (height, width,4)).astype(np.uint8)
+knn_patches = knn_patches.reshape(knn_patches.shape[0], *(pz,pz,6)).astype(np.uint8)
+reconstructed = reconstruct_from_patches_2d( knn_patches, (height, width,6)).astype(np.uint8)
 reconstructed_img = reconstructed[:,:,:3]
-reconstructed_mask = reconstructed[:,:,3]
-cv2.imshow('im vs reconstructed',np.concatenate((im,reconstructed_img),axis=1))
-cv2.imshow('mask vs predicted',np.concatenate((im_mask[:,:,0],reconstructed_mask.astype(np.uint8)),axis=1))
+reconstructed_mask = reconstructed[:,:,3].astype(np.uint8)
+reconstructed_bounary = reconstructed[:,:,4].astype(np.uint8)
+reconstructed_blend = reconstructed[:,:,5].astype(np.uint8)
+border=np.full((reconstructed.shape[0],5),255)
+im_vs_reconstructed = np.concatenate((im,reconstructed_img),axis=1)
+mask_vs_predicted = np.concatenate((im_mask[:,:,0],border,reconstructed_mask,border,reconstructed_bounary,border,reconstructed_blend),axis=1)
+cv2.imshow('im vs reconstructed',im_vs_reconstructed)
+cv2.imwrite('im_vs_reconstructed.png',im_vs_reconstructed)
+cv2.imshow('mask vs predicted',mask_vs_predicted)
+cv2.imwrite('mask_vs_predicted.png',mask_vs_predicted)
 cv2.waitKey(10000)
