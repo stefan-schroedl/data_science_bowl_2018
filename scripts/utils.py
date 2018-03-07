@@ -12,6 +12,7 @@ from skimage import img_as_float, exposure
 from skimage.io import imread
 from matplotlib import _cntr as cntr
 import matplotlib.pyplot as plt
+import torch
 
 # RLE encoding
 
@@ -279,7 +280,14 @@ def show_img(img):
             axi = ax[c,r]
 
         axi.grid(None)
-        axi.imshow(img[i])
+        img_conv = img[i]
+        if isinstance(img_conv, torch.Tensor):
+            sz = img_conv.size()
+            if len(sz) == 3 and sz[0] == 1:
+                img_conv = img_conv.squeeze().numpy()
+            else:
+                img_conv = img_conv.permute(2,3,1,0).squeeze().numpy()
+        axi.imshow(img_conv)
     if l > max_col:
         for i in range(l,max_col*int(math.ceil(1.0*l/max_col))):
             c = int(math.floor(1.0*i/ncol))
