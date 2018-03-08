@@ -14,6 +14,30 @@ from matplotlib import _cntr as cntr
 import matplotlib.pyplot as plt
 import torch
 
+
+https://stackoverflow.com/questions/394770/override-a-method-at-instance-level
+def monkeypatch(obj, fn_name, new_fn):
+    fn = getattr(obj, fn_name)
+    funcType = type(fn)
+    setattr(obj, fn_name, funcType(new_fn, fn_name, obj.__class__))
+
+# Example:
+#class Dog():
+#    def bark(self):
+#       print "Woof"
+
+#def new_bark(self):
+#    print "Woof Woof"
+
+#foo = Dog()
+#foo.bark()
+#
+#
+#monkeypatch(foo, 'bark', new_bark)
+#
+#foo.bark()
+
+
 # RLE encoding
 
 def rle_encoding(x):

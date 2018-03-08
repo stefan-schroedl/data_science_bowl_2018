@@ -20,6 +20,8 @@ import skimage
 from skimage.io import imread
 from skimage import img_as_float, img_as_ubyte
 
+import sklearn
+
 
 class NucleusDataset(Dataset):
     """Nucleus dataset."""
@@ -28,24 +30,21 @@ class NucleusDataset(Dataset):
     def read_and_stack(in_img_list):
         # return np.sum(np.stack([i*(imread(c_img)>0) for i, c_img in
         # enumerate(in_img_list, 1)], 0), 0)
-        r = img_as_float(
-            reduce(
+        r = (reduce(
                 np.bitwise_or, [
-                    imread(c_img) for c_img in iter(in_img_list)]))
-        r = r / r.max()
+                    np.asarray(Image.open(c_img)) for c_img in iter(in_img_list)])).astype(np.uint8)
+        #r = r / r.max()
         return r
 
     @staticmethod
     def read_image(in_img_list):
         #img = img_as_float(rgb2hsv(rgba2rgb(io.imread(in_img_list[0]))))
-        # return torch.from_numpy(img)
         img = Image.open(in_img_list[0])
-        img = img.convert('RGB')
-        return img
+        return np.array(img.convert('RGB')), img.size
 
     def __init__(
             self,
-            root_dir,
+            root_dir=None,
             stage_name='stage1',
             group_name='train',
             transform=None):
@@ -59,7 +58,9 @@ class NucleusDataset(Dataset):
         self.root_dir = root_dir
         self.transform = transform
 
-        # print os.path.join(dsb_data_dir, stage_name + '_*', '*', '*', '*')
+        if root_dir is None:
+            return
+
         all_images = glob(
             os.path.join(
                 root_dir,
@@ -68,7 +69,7 @@ class NucleusDataset(Dataset):
                 '*',
                 '*',
                 '*'))
-
+        
         img_df = pd.DataFrame({'path': all_images})
 
         def img_id(in_path): return in_path.split('/')[-3]
@@ -100,7 +101,11 @@ class NucleusDataset(Dataset):
             data_rows += [c_row]
 
         data_df = pd.DataFrame(data_rows)
-        data_df['images'] = data_df['images'].map(self.read_image)
+
+        ret = data_df['images'].map(self.read_image)
+        #(data_df['images'], data_df['format'], data_df['mode'], data_df['size']) = ([x[i] for x in ret] for i in range(4))
+        (data_df['images'], data_df['size']) = ([x[i] for x in ret] for i in range(2))
+    
         data_df['masks'] = data_df['masks'].map(
             self.read_and_stack).map(
             lambda x: x.astype(int))
@@ -114,40 +119,47 @@ class NucleusDataset(Dataset):
     def __getitem__(self, idx):
 
         sample = self.data_df["images"].iloc[idx]
-        masks = torch.from_numpy(
-            self.data_df["masks"].iloc[idx]).type(
-            torch.FloatTensor)
-        # insert 1 dummy channel, to be consistent with output
-        masks = torch.unsqueeze(masks, 0)
+        masks =  self.data_df["masks"].iloc[idx]
+        # insert one dummy channel, to be consistent with output
+        masks = np.expand_dims(masks, 2)
         if self.transform:
-            sample = self.transform(sample)
+            sample, masks = self.transform(sample, masks)
 
         return sample, masks
 
 # https://discuss.pytorch.org/t/feedback-on-pytorch-for-kaggle-competitions/2252/4
 
+    def train_test_split(self, **options):
+        """ Return a list of splitted indices from a DataSet.
+        Indices can be used with DataLoader to build a train and validation set.
 
-def train_valid_split(dataset, test_size=0.25, shuffle=False, random_seed=0):
-    """ Return a list of splitted indices from a DataSet.
-    Indices can be used with DataLoader to build a train and validation set.
+        Arguments:
+            A Dataset
+            A test_size, as a float between 0 and 1 (percentage split) or as an int (fixed number split)
+            Shuffling True or False
+            Random seed
+        """
+    
+        df_train, df_test = sklearn.model_selection.train_test_split(self.data_df, **options)
+        dset_train = NucleusDataset(transform=self.transform)
+        dset_train.data_df = df_train
+    
+        dset_test = NucleusDataset(transform=self.transform)
+        dset_test.data_df = df_test
+    
+        return dset_train, dset_test
+    
+    #length = len(dataset)
+    #indices = list(range(1, length))
 
-    Arguments:
-        A Dataset
-        A test_size, as a float between 0 and 1 (percentage split) or as an int (fixed number split)
-        Shuffling True or False
-        Random seed
-    """
-    length = len(dataset)
-    indices = list(range(1, length))
+    #if shuffle:
+    #    random.seed(random_seed)
+    #    random.shuffle(indices)
 
-    if shuffle:
-        random.seed(random_seed)
-        random.shuffle(indices)
-
-    if isinstance(test_size, float):
-        split = int(math.floor(test_size * length + 0.5))
-    elif isinstance(test_size, int):
-        split = test_size
-    else:
-        raise ValueError('%s should be an int or a float' % str)
-    return indices[split:], indices[:split]
+    #if isinstance(test_size, float):
+    #    split = int(math.floor(test_size * length + 0.5))
+    #elif isinstance(test_size, int):
+    #    split = test_size
+    #else:
+    #    raise ValueError('%s should be an int or a float' % str)
+    #return indices[split:], indices[:split]

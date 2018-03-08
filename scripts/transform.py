@@ -1,4 +1,51 @@
-from common import *
+import os
+from datetime import datetime
+PROJECT_PATH = os.path.dirname(os.path.realpath(__file__))
+IDENTIFIER   = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+
+#numerical libs
+import math
+import numpy as np
+import random
+import PIL
+import cv2
+
+
+# torch libs
+import torch
+import torchvision.transforms as transforms
+from torch.utils.data.dataset import Dataset
+from torch.utils.data import DataLoader
+from torch.utils.data.sampler import *
+
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.autograd import Variable
+import torch.optim as optim
+from torch.nn.parallel.data_parallel import data_parallel
+
+
+# std libs
+import collections
+import copy
+import numbers
+import inspect
+import shutil
+from timeit import default_timer as timer
+
+import csv
+import pandas as pd
+import pickle
+import glob
+import sys
+from distutils.dir_util import copy_tree
+import time
+import matplotlib.pyplot as plt
+
+import skimage
+import skimage.color
+import skimage.morphology
+from scipy import ndimage
 
 
 ## for debug
@@ -83,7 +130,7 @@ def random_rotate90_transform2(image, mask, u=0.5):
         if angle == 90:
             image = image.transpose(1,0,2)  #cv2.transpose(img)
             image = cv2.flip(image,1)
-            mask = mask.transpose(1,0)
+            mask = mask.transpose(1,0,2)
             mask = cv2.flip(mask,1)
 
         elif angle == 180:
@@ -93,7 +140,7 @@ def random_rotate90_transform2(image, mask, u=0.5):
         elif angle == 270:
             image = image.transpose(1,0,2)  #cv2.transpose(img)
             image = cv2.flip(image,0)
-            mask = mask.transpose(1,0)
+            mask = mask.transpose(1,0,2)
             mask = cv2.flip(mask,0)
     return image, mask
 
