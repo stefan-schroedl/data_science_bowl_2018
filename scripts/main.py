@@ -1,3 +1,5 @@
+#%pycat main.py
+
 import os
 import shutil
 import torch
@@ -21,6 +23,7 @@ def save_model(
         'stats': stats},
         fname)
     if is_best:
+        print('new best: ', stats[-1])
         shutil.copyfile(fname, 'model_best.pth.tar')
 
 
@@ -33,8 +36,8 @@ def load_model(model, optimizer, fname='model_best.pth.tar'):
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         stats = checkpoint['stats']
         print(
-            "=> loaded checkpoint '{}' (epoch {})".format(
-                fname, checkpoint['epoch']))
+            "=> loaded checkpoint '{}' (iteration {})".format(
+                fname, checkpoint['it']))
         return it, stats
     else:
         print("=> no checkpoint found at '{}'".format(fname))
@@ -71,13 +74,15 @@ def train(
         save_every):
     running_loss = 0.0
     cnt = 0
+
     for i, (img, labels) in enumerate(train_loader, it + 1):
         img, labels = Variable(img), Variable(labels)
-        optimizer.zero_grad()
+        
         model.train(True)
 
         outputs = model(img)
         loss = criterion(outputs, labels)
+        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         cnt = cnt + 1
@@ -106,6 +111,36 @@ def train(
                         is_best,
                         'model_save.pth.tar')
     return i, best_loss, best_it
+
+def baseline(
+        loader,
+        criterion,
+        it):
+    
+    m = 0.0
+    cnt = 0.0
+    for i, (img, labels) in enumerate(loader):
+        if i > it:
+            break
+        m += labels[0].sum()
+        cnt += labels[0].numel()
+    m = m / cnt
+
+    running_loss = 0.0
+    
+    for i, (img, labels) in enumerate(loader):
+        if i > it:
+            break
+        outputs = labels.clone()        
+        outputs = torch.clamp(outputs, m, m)
+        img, labels = Variable(img), Variable(labels)
+        outputs = Variable(outputs)
+    
+        loss = criterion(outputs, labels)
+
+        running_loss += loss.data[0]
+
+    return running_loss/it, m
 
 
 def adjust_learning_rate(optimizer, epoch, lr0):

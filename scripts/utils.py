@@ -13,9 +13,10 @@ from skimage.io import imread
 from matplotlib import _cntr as cntr
 import matplotlib.pyplot as plt
 import torch
+import torchvision
+from torchvision.transforms import ToPILImage
 
-
-https://stackoverflow.com/questions/394770/override-a-method-at-instance-level
+#https://stackoverflow.com/questions/394770/override-a-method-at-instance-level
 def monkeypatch(obj, fn_name, new_fn):
     fn = getattr(obj, fn_name)
     funcType = type(fn)
@@ -37,7 +38,12 @@ def monkeypatch(obj, fn_name, new_fn):
 #
 #foo.bark()
 
-
+def is_inverted(img,invert_thresh_pd=10.0):
+    img_grey = img_as_ubyte(rgb2grey(img))
+    img_th = cv2.threshold(img_grey,0,255,cv2.THRESH_OTSU)[1]
+    
+    return np.sum(img_th==255)>((invert_thresh_pd/10.0)*np.sum(img_th==0))
+        
 # RLE encoding
 
 def rle_encoding(x):
@@ -278,7 +284,7 @@ def add_contour(z, ax, color='black'):
             ax.add_artist(p)
 
 # display one or several images
-def show_img(img):
+def show_images(img):
     max_col = 3
     if not isinstance(img, (tuple, list)):
         img = [img]
@@ -304,14 +310,17 @@ def show_img(img):
             axi = ax[c,r]
 
         axi.grid(None)
-        img_conv = img[i]
-        if isinstance(img_conv, torch.Tensor):
-            sz = img_conv.size()
-            if len(sz) == 3 and sz[0] == 1:
-                img_conv = img_conv.squeeze().numpy()
-            else:
-                img_conv = img_conv.permute(2,3,1,0).squeeze().numpy()
-        axi.imshow(img_conv)
+        if isinstance(img[i], np.ndarray):
+            img_conv = img[i]
+        else:
+            img_conv =  ToPILImage()(img[i])
+        #if isinstance(img_conv, torch.Tensor):
+        #    sz = img_conv.size()
+        #    if len(sz) == 3 and sz[0] == 1:
+        #        img_conv = img_conv.squeeze().numpy()
+        #    else:
+        #        img_conv = img_conv.permute(2,3,1,0).squeeze().numpy()
+        axi.imshow(img_conv,cmap='gray')
     if l > max_col:
         for i in range(l,max_col*int(math.ceil(1.0*l/max_col))):
             c = int(math.floor(1.0*i/ncol))
@@ -335,6 +344,10 @@ def plot_img_and_hist(image, axes=None, bins=256):
 
     """
 
+    if isinstance(image, torch.Tensor):
+        image = image.numpy()
+    image = image.squeeze()
+
     if axes is None:
         fig,axes = plt.subplots(1,2,figsize=(16, 16))
         plt.tight_layout()
@@ -344,7 +357,7 @@ def plot_img_and_hist(image, axes=None, bins=256):
     ax_cdf = ax_hist.twinx()
 
     # Display image
-    ax_img.imshow(image, cmap=plt.cm.gray)
+    ax_img.imshow(image, cmap='gray')
     ax_img.set_axis_off()
     ax_img.set_adjustable('box-forced')
 
