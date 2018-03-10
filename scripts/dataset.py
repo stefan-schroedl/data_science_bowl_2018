@@ -5,34 +5,39 @@ import os
 import torch
 import pandas as pd
 import numpy as np
-from torch.utils.data import Dataset, DataLoader
-from torch.utils.data.sampler import SubsetRandomSampler
-from torchvision import transforms, utils
-from PIL import Image
-from torch.autograd import Variable
+
 import random
 import math
 from functools import reduce
 
 from glob import glob
 
+from torchvision import transforms, utils
+from torch.autograd import Variable
+from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.sampler import SubsetRandomSampler
+
+from PIL import Image
+
 import skimage
-from skimage.io import imread
 from skimage import img_as_float, img_as_ubyte
+from skimage.io import imread
+from skimage.color import rgb2grey
 
 import sklearn
+from sklearn.model_selection import train_test_split as train_test_split_sk
 
+import cv2
 
 class NucleusDataset(Dataset):
     """Nucleus dataset."""
 
     @staticmethod
     def read_and_stack(in_img_list):
-        # return np.sum(np.stack([i*(imread(c_img)>0) for i, c_img in
-        # enumerate(in_img_list, 1)], 0), 0)
-        r = (reduce(
-                np.bitwise_or, [
-                    np.asarray(Image.open(c_img)) for c_img in iter(in_img_list)])).astype(np.uint8)
+        return np.sum(np.stack([i*(imread(c_img)>0) for i, c_img in enumerate(in_img_list, 1)], 0), 0)
+        #r = (reduce(
+        #        np.bitwise_or, [
+        #            np.asarray(Image.open(c_img)) for c_img in iter(in_img_list)])).astype(np.uint8)
         #r = r / r.max()
         return r
 
@@ -41,6 +46,16 @@ class NucleusDataset(Dataset):
         #img = img_as_float(rgb2hsv(rgba2rgb(io.imread(in_img_list[0]))))
         img = Image.open(in_img_list[0])
         return np.array(img.convert('RGB')), img.size
+
+    @staticmethod
+    def as_segmentation(img):
+        return (img>0).astype(int)
+
+    @staticmethod
+    def is_inverted(img, invert_thresh_pd=10.0):
+        img_grey = img_as_ubyte(rgb2grey(img))
+        img_th = cv2.threshold(img_grey,0,255,cv2.THRESH_OTSU)[1]
+        return np.sum(img_th==255)>((invert_thresh_pd/10.0)*np.sum(img_th==0))
 
     def __init__(
             self,
@@ -110,25 +125,29 @@ class NucleusDataset(Dataset):
             self.read_and_stack).map(
             lambda x: x.astype(int))
 
-        # print data_df.describe()
+        data_df['masks_unlabeled'] = data_df['masks'].map(self.as_segmentation)
+        data_df['inv'] = data_df['images'].map(self.is_inverted)
+
         self.data_df = data_df
 
+        
     def __len__(self):
         return self.data_df.shape[0]
 
+    
     def __getitem__(self, idx):
 
         sample = self.data_df["images"].iloc[idx]
         masks =  self.data_df["masks"].iloc[idx]
+        masks_unlabeled =  self.data_df["masks_unlabeled"].iloc[idx]
         # insert one dummy channel, to be consistent with output
         masks = np.expand_dims(masks, 2)
         if self.transform:
             sample, masks = self.transform(sample, masks)
 
-        return sample, masks
-
-# https://discuss.pytorch.org/t/feedback-on-pytorch-for-kaggle-competitions/2252/4
-
+        return sample, (masks, masks_unlabeled)
+    
+    
     def train_test_split(self, **options):
         """ Return a list of splitted indices from a DataSet.
         Indices can be used with DataLoader to build a train and validation set.
@@ -139,27 +158,12 @@ class NucleusDataset(Dataset):
             Shuffling True or False
             Random seed
         """
-    
-        df_train, df_test = sklearn.model_selection.train_test_split(self.data_df, **options)
+   
+        df_train, df_test = train_test_split_sk(self.data_df, **options)
         dset_train = NucleusDataset(transform=self.transform)
         dset_train.data_df = df_train
-    
+
         dset_test = NucleusDataset(transform=self.transform)
         dset_test.data_df = df_test
-    
+
         return dset_train, dset_test
-    
-    #length = len(dataset)
-    #indices = list(range(1, length))
-
-    #if shuffle:
-    #    random.seed(random_seed)
-    #    random.shuffle(indices)
-
-    #if isinstance(test_size, float):
-    #    split = int(math.floor(test_size * length + 0.5))
-    #elif isinstance(test_size, int):
-    #    split = test_size
-    #else:
-    #    raise ValueError('%s should be an int or a float' % str)
-    #return indices[split:], indices[:split]
