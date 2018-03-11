@@ -21,6 +21,47 @@ from torchvision.transforms import ToPILImage
 
 
 
+def clear_log():
+    global LOG
+    LOG = []
+
+def get_log():
+    global LOG
+    return LOG
+
+def set_log(l):
+    global LOG
+    LOG = l
+
+def insert_log(it, k, v):
+    global LOG
+    if len(LOG) > 0:
+        last = LOG[-1]
+        if last['it'] > it:
+            raise ValueError('trying to change history at %d, current is %d' % it, last['it'])
+        if last['it'] != it:
+            last = {'it':it}
+            LOG.append(last)
+    else:
+        last = {'it':it}
+        LOG = [last]
+    last[k] = v
+
+def get_latest_log(what):
+    global LOG
+    last = LOG[-1]
+    if not what in last:
+        raise ValueError('no such key in log: %s' % what)
+    return last[what]
+
+
+def get_history_log(what):
+    global LOG
+    vals = [x[what] for x in LOG if what in x]
+    its = [x['it'] for x in LOG if what in x]
+    return vals, its
+
+
 def init_logging(opts={}):
     filename = None
     if hasattr(opts, 'log_file') and opts.log_file:

@@ -30,18 +30,19 @@ import dataset
 from dataset import NucleusDataset
 import architectures
 from architectures import CNN
-from utils import mkdir_p, csv_list, strip_end, init_logging
+from utils import mkdir_p, csv_list, strip_end, init_logging, get_log, set_log, clear_log, insert_log, get_latest_log, get_history_log
 from adjust_learn_rate import ReduceLROnPlateau, adjust_learning_rate
 
-def save_plot(stats, fname):
+def get_checkpoint_file(args):
+    return os.path.join(args.out_dir, 'model_save_%s.pth.tar' % args.experiment)
 
-    xs = map(itemgetter(0), stats)
-    ys = map(itemgetter(1), stats)
-    zs = map(itemgetter(2), stats)
+def save_plot(fname):
+    train_loss, train_loss_it = get_history_log('train_loss')
+    valid_loss, valid_loss_it = get_history_log('valid_loss')
 
     fig, ax = plt.subplots( nrows=1, ncols=1 )
-    ax.plot(xs,ys,'g')
-    ax.plot(xs,zs,'r')
+    ax.plot(train_loss_it, train_loss, 'g')
+    ax.plot(valid_loss_it, valid_loss, 'r')
     fig.savefig(fname)
     plt.close(fig)
 
@@ -96,6 +97,10 @@ parser.add('--save-every', '-S', default=10, type=int,
            metavar='N', help='save frequency [default: %(default)s]')
 parser.add('--eval-every', default=10, type=int,
            metavar='N', help='eval frequency [default: %(default)s]')
+parser.add('--patience', default=10, type=int,
+           metavar='N', help='patience for lr scheduler [default: %(default)s]')
+parser.add('--min_lr', default=0.0001, type=float,
+           metavar='N', help='minimum learn rate for scheduler [default: %(default)s]')
 parser.add('--resume', default='', type=str, metavar='PATH',
            help='path to latest checkpoint [default: %(default)s]')
 parser.add('--override-model-opts', type=csv_list, default='override_model_opts,resume,save_every',
@@ -103,16 +108,18 @@ parser.add('--override-model-opts', type=csv_list, default='override_model_opts,
 parser.add('--evaluate', '-E', dest='evaluate', action='store_true',
            help='evaluate model on validation set')
 parser.add('--verbose', '-V', action='store_true', help='verbose logging')
+parser.add('--force-overwrite', type=int, default=0, help='overwrite existing checkpoint, if it exists')
 parser.add('--log-file', help='write logging output to file')
 
 def save_checkpoint(
         model,
         optimizer,
         args,
-        stats,
         it,
         is_best=False,
         fname='model_save.pth.tar'):
+
+    global best_loss, best_it
     m_state_dict = model.state_dict()
     o_state_dict = optimizer.state_dict()
 
@@ -121,10 +128,12 @@ def save_checkpoint(
         'it': it,
         'model_state_dict': m_state_dict,
         'optimizer_state_dict': o_state_dict,
-        'stats': stats},
+        'best_loss': best_loss,
+        'best_it': best_it,
+        'log': get_log()},
         fname)
     if is_best:
-        logging.info('new best: it=%d, train=%.5f, valid=%.5f' % (stats[-1][0], stats[-1][1], stats[-1][2]))
+        logging.info('new best: it = %d, train = %.5f, valid = %.5f' % (get_latest_log('it'), get_latest_log('train_loss'), get_latest_log('valid_loss')))
         pref = strip_end(fname, '.pth.tar')
         shutil.copyfile(fname, '%s_best.pth.tar' % pref)
 
@@ -132,12 +141,14 @@ def save_checkpoint(
 def load_checkpoint(model, optimizer, args, fname='model_best.pth.tar'):
 
     if not os.path.isfile(fname):
-        error('checkpoint not found: %s', fname)
+        raise ValueError('checkpoint not found: %s', fname)
         
     checkpoint = torch.load(fname)
     it = checkpoint['it']
-    stats = checkpoint['stats']
-        
+    set_log(checkpoint['log'])
+    best_it = checkpoint['best_it']
+    best_loss = checkpoint['best_loss']
+
     if model:
         model.load_state_dict(checkpoint['model_state_dict'])
 
@@ -163,7 +174,7 @@ def load_checkpoint(model, optimizer, args, fname='model_best.pth.tar'):
     logging.info(
         "=> loaded checkpoint '{}' (iteration {})".format(
             fname, checkpoint['it']))
-    return it, stats, new_args
+    return it, new_args
 
 
 def validate(model, loader, criterion):
@@ -186,7 +197,6 @@ def train(
         model,
         criterion,
         optimizer,
-        stats,
         epoch,
         eval_every,
         print_every,
@@ -211,13 +221,14 @@ def train(
 
             l = validate(model, valid_loader, criterion)
             train_loss = running_loss / cnt
-            stats.append((it, train_loss, l))
+            insert_log(it, 'train_loss', train_loss)
+            insert_log(it, 'valid_loss', l)
             running_loss = 0.0
 
             if cnt > 0 and it % print_every == 0:
                 logging.info('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f' %
-                      (epoch, it, stats[-1][1], stats[-1][2]))
-                save_plot(stats, os.path.join(args.out_dir, 'progress.png'))
+                      (epoch, it, train_loss, l))
+                save_plot(os.path.join(args.out_dir, 'progress.png'))
 
             if it % save_every == 0:
                 is_best = False
@@ -229,16 +240,16 @@ def train(
                         model,
                         optimizer,
                         args,
-                        stats,
                         it,
                         is_best,
-                        os.path.join(args.out_dir, 'model_save_%s.pth.tar' % args.experiment))
+                        get_checkpoint_file(args))
             cnt = 0
-
+                        
             lr_new = lr_scheduler.on_epoch_end(it, lr, train_loss)
             if lr_new != lr:
                 lr = lr_new
                 adjust_learning_rate(optimizer, lr)
+            insert_log(it, 'lr', lr)
 
     return it, best_loss, best_it
 
@@ -295,7 +306,7 @@ def train_transform(img, mask, mask_seg):
 
 
 def main():
-    global it, best_it, best_loss, stats, args, lr_scheduler, lr
+    global it, best_it, best_loss, LOG, args, lr_scheduler, lr
     args = parser.parse_args()
 
     if args.out_dir is None:
@@ -314,8 +325,7 @@ def main():
     it = 0
     best_loss = 1e20
     best_it = 0
-    stats = []
-                    
+     
     # define loss function (criterion) and optimizer
     criterion = nn.MSELoss()
 
@@ -326,7 +336,14 @@ def main():
 
     # optionally resume from a checkpoint
     if args.resume:
-        it, stats, args = load_checkpoint(model, optimizer, args, args.resume)
+        it, args = load_checkpoint(model, optimizer, args, args.resume)
+        args.force_overwrite = 1
+    else:
+        # prevent accidental overwriting
+        ckpt_file = get_checkpoint_file(args)
+        if os.path.isfile(ckpt_file) and args.force_overwrite == 0:
+            raise ValueError('checkpoint already exists, exiting: %s' % ckpt_file)
+        clear_log()
 
     # Data loading
     logging.info('loading data')
@@ -335,7 +352,7 @@ def main():
         return NucleusDataset(args.data, args.stage, transform=train_transform)
     timer = timeit.Timer(load_data)
     t,dset = timer.timeit(number=1)
-    logging.info('load time: %s' % t)
+    logging.info('load time: %.1f' % t)
 
     # hack: this image format (1388, 1040) occurs only ones, stratify complains ..
     dset.data_df = dset.data_df[dset.data_df['size'] != (1388, 1040)]
@@ -353,11 +370,11 @@ def main():
         l = validate(model, valid_loader, criterion)
         logging.info('validation for loaded model: %s' % l)
 
-    lr_scheduler = ReduceLROnPlateau(verbose=1)
+    lr_scheduler = ReduceLROnPlateau(patience=args.patience,verbose=1)
 
     for epoch in range(args.epochs):
-        it, best_loss, best_it = train(train_loader, valid_loader, model, criterion, optimizer, stats, epoch, args.eval_every, args.print_every, args.save_every)
-    print it, best_loss, best_it
+        it, best_loss, best_it = train(train_loader, valid_loader, model, criterion, optimizer, epoch, args.eval_every, args.print_every, args.save_every)
+        logging.info('final best: it = %d, valid = %.5f' % (best_it, best_loss))
 
 
 if __name__ == '__main__':
