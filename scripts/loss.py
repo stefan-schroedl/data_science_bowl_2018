@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 import matplotlib
 import matplotlib.pyplot as plt
-from post_process import parametric_pipeline
+#from post_process import parametric_pipeline
 
 from utils import add_contour
 
@@ -187,6 +187,18 @@ class DiceLoss(nn.Module):
     def forward(self, output, target):
         prediction = self.sigmoid(output)
         return 1 - 2 * torch.sum(prediction * target) / (torch.sum(prediction) + torch.sum(target) + 1e-7)
+
+
+class JaccardLoss(nn.Module):
+    def __init__(self):
+        super(JaccardLoss, self).__init__()
+
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, output, target):
+        prediction = self.sigmoid(output)
+        prod = torch.sum(prediction * target)
+        return 1 - 2 * (prod + 1.0) / (torch.sum(prediction) + torch.sum(target) - prod + 1.0)
 
 
 def segmentation_loss(output, target):

@@ -123,9 +123,9 @@ class NucleusDataset(Dataset):
     
         data_df['masks'] = data_df['masks'].map(
             self.read_and_stack).map(
-            lambda x: x.astype(int))
+            lambda x: x.astype(np.uint8))
 
-        data_df['masks_unlabeled'] = data_df['masks'].map(self.as_segmentation)
+        data_df['masks_seg'] = data_df['masks'].map(self.as_segmentation)
         data_df['inv'] = data_df['images'].map(self.is_inverted)
 
         self.data_df = data_df
@@ -139,13 +139,11 @@ class NucleusDataset(Dataset):
 
         sample = self.data_df["images"].iloc[idx]
         masks =  self.data_df["masks"].iloc[idx]
-        masks_unlabeled =  self.data_df["masks_unlabeled"].iloc[idx]
-        # insert one dummy channel, to be consistent with output
-        masks = np.expand_dims(masks, 2)
+        masks_seg =  self.data_df["masks_seg"].iloc[idx]
         if self.transform:
-            sample, masks = self.transform(sample, masks)
+            sample, masks, masks_seg = self.transform(sample, masks, masks_seg)
 
-        return sample, (masks, masks_unlabeled)
+        return sample, (masks, masks_seg)
     
     
     def train_test_split(self, **options):

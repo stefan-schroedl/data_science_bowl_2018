@@ -4,7 +4,7 @@ import os
 import shutil
 import torch
 from torch.autograd import Variable
-
+from tqdm import tqdm
 
 def save_model(
         model,
@@ -48,10 +48,10 @@ def validate(model, loader, criterion):
     model.eval()
     running_loss = 0.0
     cnt = 0
-    for i, (img, labels) in enumerate(loader):
-        img, labels = Variable(img), Variable(labels)
+    for i, (img, (labels, labels_seg)) in enumerate(loader):
+        img, labels_seg = Variable(img), Variable(labels_seg)
         outputs = model(img)
-        loss = criterion(outputs, labels)
+        loss = criterion(outputs, labels_seg)
         running_loss += loss.data[0]
         cnt = cnt + 1
     l = running_loss / cnt
@@ -65,82 +65,80 @@ def train(
         criterion,
         optimizer,
         stats,
-        best_loss,
-        best_it,
         epoch,
-        it,
         eval_every,
         print_every,
         save_every):
     running_loss = 0.0
     cnt = 0
-
-    for i, (img, labels) in enumerate(train_loader, it + 1):
-        img, labels = Variable(img), Variable(labels)
+    global it, best_it, best_loss
+    for it, (img, (labels, labels_seg)) in tqdm(enumerate(train_loader, it + 1)):
+        img, labels_seg = Variable(img), Variable(labels_seg)
         
         model.train(True)
 
         outputs = model(img)
-        loss = criterion(outputs, labels)
+        loss = criterion(outputs, labels_seg)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         cnt = cnt + 1
 
         running_loss += loss.data[0]
-        if cnt > 0 and i % eval_every == 0:
+        if cnt > 0 and it % eval_every == 0:
 
             l = validate(model, valid_loader, criterion)
-            stats.append((i, running_loss / cnt, l))
+            stats.append((it, running_loss / cnt, l))
             running_loss = 0.0
 
-            if cnt > 0 and i % print_every == 0:
+            if cnt > 0 and it % print_every == 0:
                 print('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f' %
-                      (epoch, i, stats[-1][1], stats[-1][2]))
-            if i % save_every == 0:
+                      (epoch, it, stats[-1][1], stats[-1][2]))
+            if it % save_every == 0:
                 is_best = False
                 if best_loss > l:
                     best_loss = l
-                    best_it = i
+                    best_it = it
                     is_best = True
                     save_model(
                         model,
                         optimizer,
                         stats,
-                        i,
+                        it,
                         is_best,
                         'model_save.pth.tar')
-    return i, best_loss, best_it
+    return it, best_loss, best_it
 
 def baseline(
-        loader,
+        train_loader,
+        valid_loader,
         criterion,
         it):
     
     m = 0.0
     cnt = 0.0
-    for i, (img, labels) in enumerate(loader):
+    for i, (img, (labels, labels_seg)) in enumerate(train_loader):
         if i > it:
             break
-        m += labels[0].sum()
-        cnt += labels[0].numel()
+        m += labels_seg[0].sum()
+        cnt += labels_seg[0].numel()
     m = m / cnt
 
     running_loss = 0.0
     
-    for i, (img, labels) in enumerate(loader):
-        if i > it:
-            break
-        outputs = labels.clone()        
+    cnt = 0
+    for i, (img, (labels,labels_seg)) in enumerate(valid_loader):
+        outputs = labels_seg.clone()        
         outputs = torch.clamp(outputs, m, m)
-        img, labels = Variable(img), Variable(labels)
+        img, labels = Variable(img), Variable(labels_seg)
         outputs = Variable(outputs)
     
-        loss = criterion(outputs, labels)
+        loss = criterion(outputs, labels_seg)
 
         running_loss += loss.data[0]
+        cnt += 1
 
-    return running_loss/it, m
+    return running_loss/cnt, m
 
 
 def adjust_learning_rate(optimizer, epoch, lr0):
