@@ -7,6 +7,7 @@ Takes only 200 seconds to process 5635 mask files
 import math
 import numpy as np
 import os
+import errno
 import skimage
 from skimage import img_as_float, exposure
 from skimage.io import imread
@@ -15,6 +16,30 @@ import matplotlib.pyplot as plt
 import torch
 import torchvision
 from torchvision.transforms import ToPILImage
+
+
+
+def strip_end(text, suffix):
+    if not text.endswith(suffix):
+        return text
+    return text[:len(text)-len(suffix)]
+
+                
+# auxiliary class for comma-delimited command line arguments                                                                           
+def csv_list(init):
+    l=init.split(',')
+    l = [x.strip() for x in l if len(x)]
+    return l
+
+def mkdir_p(path):
+    try:
+        os.makedirs(path)
+        return 0
+    except OSError as exc:  # Python >2.5
+        if exc.errno == errno.EEXIST and os.path.isdir(path):
+            return 1
+        else:
+            raise
 
 #https://stackoverflow.com/questions/394770/override-a-method-at-instance-level
 def monkeypatch(obj, fn_name, new_fn):
