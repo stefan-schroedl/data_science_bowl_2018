@@ -7,6 +7,7 @@ import copy
 from tqdm import tqdm
 import timeit
 import time
+import logging
 
 import numpy as np
 
@@ -29,7 +30,7 @@ import dataset
 from dataset import NucleusDataset
 import architectures
 from architectures import CNN
-from utils import mkdir_p, csv_list, strip_end
+from utils import mkdir_p, csv_list, strip_end, init_logging
 from adjust_learn_rate import ReduceLROnPlateau, adjust_learning_rate
 
 def save_plot(stats, fname):
@@ -101,6 +102,8 @@ parser.add('--override-model-opts', type=csv_list, default='override_model_opts,
            help='when resuming, change these options [default: %(default)s]')
 parser.add('--evaluate', '-E', dest='evaluate', action='store_true',
            help='evaluate model on validation set')
+parser.add('--verbose', '-V', action='store_true', help='verbose logging')
+parser.add('--log-file', help='write logging output to file')
 
 def save_checkpoint(
         model,
@@ -121,7 +124,7 @@ def save_checkpoint(
         'stats': stats},
         fname)
     if is_best:
-        print('new best: ', stats[-1])
+        logging.info('new best: it=%d, train=%.5f, valid=%.5f' % (stats[-1][0], stats[-1][1], stats[-1][2]))
         pref = strip_end(fname, '.pth.tar')
         shutil.copyfile(fname, '%s_best.pth.tar' % pref)
 
@@ -153,11 +156,11 @@ def load_checkpoint(model, optimizer, args, fname='model_best.pth.tar'):
                 if k in old_args.__dict__:
                     v_old = old_args.__dict__[k]
                     if v_old != v_new:
-                        print 'WARNING: overriding option %s, old = %s, new = %s' % (k, v_old, v_new)
+                        logging.warn(' overriding option %s, old = %s, new = %s' % (k, v_old, v_new))
                 new_args.__dict__[k] = v_new
                 
 
-    print(
+    logging.info(
         "=> loaded checkpoint '{}' (iteration {})".format(
             fname, checkpoint['it']))
     return it, stats, new_args
@@ -212,7 +215,7 @@ def train(
             running_loss = 0.0
 
             if cnt > 0 and it % print_every == 0:
-                print('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f' %
+                logging.info('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f' %
                       (epoch, it, stats[-1][1], stats[-1][2]))
                 save_plot(stats, os.path.join(args.out_dir, 'progress.png'))
 
@@ -299,6 +302,13 @@ def main():
        args.out_dir = 'experiments/%s' % args.experiment 
     mkdir_p(args.out_dir)
 
+    if args.config is not None and os.path.isfile(args.config):
+        shutil.copy(args.config, args.out_dir)
+
+    if args.log_file is None:
+        args.log_file = os.path.join(args.out_dir, '%s.log' % args.experiment)
+
+    init_logging(args)
     # create model
     model = CNN()
     it = 0
@@ -319,13 +329,13 @@ def main():
         it, stats, args = load_checkpoint(model, optimizer, args, args.resume)
 
     # Data loading
-    print 'loading data'
+    logging.info('loading data')
     #dset = NucleusDataset(args.data, args.stage, transform=train_transform)
     def load_data():
         return NucleusDataset(args.data, args.stage, transform=train_transform)
     timer = timeit.Timer(load_data)
     t,dset = timer.timeit(number=1)
-    print 'load time', t
+    logging.info('load time: %s' % t)
 
     # hack: this image format (1388, 1040) occurs only ones, stratify complains ..
     dset.data_df = dset.data_df[dset.data_df['size'] != (1388, 1040)]
@@ -341,7 +351,7 @@ def main():
 
     if args.resume:
         l = validate(model, valid_loader, criterion)
-        print 'validation for loaded model: ', l 
+        logging.info('validation for loaded model: %s' % l)
 
     lr_scheduler = ReduceLROnPlateau(verbose=1)
 

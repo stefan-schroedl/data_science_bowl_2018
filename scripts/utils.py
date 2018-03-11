@@ -7,6 +7,8 @@ Takes only 200 seconds to process 5635 mask files
 import math
 import numpy as np
 import os
+import logging
+import socket
 import errno
 import skimage
 from skimage import img_as_float, exposure
@@ -19,13 +21,29 @@ from torchvision.transforms import ToPILImage
 
 
 
+def init_logging(opts={}):
+    filename = None
+    if hasattr(opts, 'log_file') and opts.log_file:
+        # slight hack: dollar signs work if config file is read by shell, here we need to strip it
+        # another slight hack: sometimes HOSTNAME is not set
+        if not 'HOSTNAME' in os.environ.keys():
+            os.environ['HOSTNAME'] = socket.gethostname()
+        filename = opts.log_file.replace('$','').format(**os.environ)
+    verbose = False
+    if hasattr(opts, 'verbose'):
+        verbose = opts.verbose
+    logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO, format="[%(asctime)s\t%(process)d\t%(levelname)s]\t%(message\
+)s", datefmt="%Y%m%d %H:%M:%S", filename=filename)
+
+
+
 def strip_end(text, suffix):
     if not text.endswith(suffix):
         return text
     return text[:len(text)-len(suffix)]
 
-                
-# auxiliary class for comma-delimited command line arguments                                                                           
+
+# auxiliary class for comma-delimited command line arguments
 def csv_list(init):
     l=init.split(',')
     l = [x.strip() for x in l if len(x)]
@@ -66,9 +84,9 @@ def monkeypatch(obj, fn_name, new_fn):
 def is_inverted(img,invert_thresh_pd=10.0):
     img_grey = img_as_ubyte(rgb2grey(img))
     img_th = cv2.threshold(img_grey,0,255,cv2.THRESH_OTSU)[1]
-    
+
     return np.sum(img_th==255)>((invert_thresh_pd/10.0)*np.sum(img_th==0))
-        
+
 # RLE encoding
 
 def rle_encoding(x):
