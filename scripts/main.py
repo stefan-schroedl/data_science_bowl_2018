@@ -18,6 +18,11 @@ from torch.utils.data import Dataset, DataLoader
 import torchvision
 from torchvision.transforms import ToTensor, ToPILImage
 
+import matplotlib.pyplot as plt
+import operator
+from operator import itemgetter
+
+
 import transform
 from transform import random_rotate90_transform2
 import dataset
@@ -25,10 +30,7 @@ from dataset import NucleusDataset
 import architectures
 from architectures import CNN
 from utils import mkdir_p, csv_list, strip_end
-
-import matplotlib.pyplot as plt
-import operator
-from operator import itemgetter
+from adjust_learn_rate import ReduceLROnPlateau, adjust_learning_rate
 
 def save_plot(stats, fname):
 
@@ -188,7 +190,7 @@ def train(
         save_every):
     running_loss = 0.0
     cnt = 0
-    global it, best_it, best_loss, args
+    global it, best_it, best_loss, args, lr, lr_scheduler
     for it, (img, (labels, labels_seg)) in tqdm(enumerate(train_loader, it + 1)):
         img, labels_seg = Variable(img), Variable(labels_seg)
         
@@ -205,7 +207,8 @@ def train(
         if cnt > 0 and it % eval_every == 0:
 
             l = validate(model, valid_loader, criterion)
-            stats.append((it, running_loss / cnt, l))
+            train_loss = running_loss / cnt
+            stats.append((it, train_loss, l))
             running_loss = 0.0
 
             if cnt > 0 and it % print_every == 0:
@@ -228,6 +231,12 @@ def train(
                         is_best,
                         os.path.join(args.out_dir, 'model_save_%s.pth.tar' % args.experiment))
             cnt = 0
+
+            lr_new = lr_scheduler.on_epoch_end(it, lr, train_loss)
+            if lr_new != lr:
+                lr = lr_new
+                adjust_learning_rate(optimizer, lr)
+
     return it, best_loss, best_it
 
 def baseline(
@@ -262,12 +271,6 @@ def baseline(
     return running_loss/cnt, m
 
 
-def adjust_learning_rate(optimizer, epoch, lr0):
-    """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
-    lr = lr0 * (0.1 ** (epoch // 30))
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
-
 
 #Note: for image and mask, there is no compatible solution that can use transforms.Compse(), see https://github.com/pytorch/vision/issues/9
 #transformations = transforms.Compose([random_rotate90_transform2(),transforms.ToTensor(),])
@@ -289,7 +292,7 @@ def train_transform(img, mask, mask_seg):
 
 
 def main():
-    global it, best_it, best_loss, stats, args
+    global it, best_it, best_loss, stats, args, lr_scheduler, lr
     args = parser.parse_args()
 
     if args.out_dir is None:
@@ -306,7 +309,8 @@ def main():
     # define loss function (criterion) and optimizer
     criterion = nn.MSELoss()
 
-    optimizer = optim.Adam(model.parameters(), args.lr,
+    lr = args.lr
+    optimizer = optim.Adam(model.parameters(), lr,
                            #momentum=args.momentum,
                            weight_decay=args.weight_decay)
 
@@ -338,9 +342,10 @@ def main():
     if args.resume:
         l = validate(model, valid_loader, criterion)
         print 'validation for loaded model: ', l 
-        
+
+    lr_scheduler = ReduceLROnPlateau(verbose=1)
+
     for epoch in range(args.epochs):
-        # adjust_learning_rate(optimizer, epoch)
         it, best_loss, best_it = train(train_loader, valid_loader, model, criterion, optimizer, stats, epoch, args.eval_every, args.print_every, args.save_every)
     print it, best_loss, best_it
 
