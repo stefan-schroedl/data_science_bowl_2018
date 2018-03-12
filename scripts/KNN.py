@@ -3,6 +3,7 @@ import numpy as np
 from sklearn.feature_extraction.image import extract_patches_2d
 from sklearn.feature_extraction.image import reconstruct_from_patches_2d
 import cv2
+import faiss   
 
 class KNN():
     def __init__(self,n=5,patch_size=13,sample=100,gauss_blur=False,similarity=False,normalize=True):
@@ -21,6 +22,7 @@ class KNN():
         self.gkernel=gkernel
         self.similarity=similarity
         self.gauss_blur=gauss_blur
+        self.faiss=True
 
     def prepare_fit(self,img,mask,mask_seg):
 	img = (img.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
@@ -55,7 +57,11 @@ class KNN():
             self.patches_3d=np.concatenate( (self.patches_3d, data_patches_3d) , axis=0)
 
     def fit(self):
-        self.model.fit(self.patches_3d, np.zeros((len(self.patches_3d))))
+        if self.faiss:
+            self.faiss_model = faiss.IndexFlatL2(self.patches_3d.shape[1])
+            self.faiss_model.add(self.patches_3d.astype(np.float32))
+        else:
+            self.model.fit(self.patches_3d, np.zeros((len(self.patches_3d))))
 
     def predict(self,img):
 	img = (img.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
@@ -70,7 +76,11 @@ class KNN():
 	if self.normalize:
 	    img_patches -= mean
 	    img_patches /= std
-        nearest_wds=self.model.kneighbors(img_patches, return_distance=True)
+        nearest_wds=None
+        if self.faiss:
+            nearest_wds=self.faiss_model.search(img_patches.astype(np.float32), self.n)
+        else:
+            nearest_wds=self.model.kneighbors(img_patches, return_distance=True)
 	knn_patches=np.array([])
 	for x in xrange(img_patches.shape[0]):
 	    idxs=nearest_wds[1][x]
