@@ -1,4 +1,25 @@
 #!//usr/bin/env python
+import sys
+import os
+import shutil
+from tqdm import tqdm
+from sklearn.neighbors import KNeighborsClassifier
+from KNN import *
+#torch imports
+#from main import *
+import torch
+from torch import optim
+import torchvision
+from torch.autograd import Variable
+from torchvision.transforms import ToTensor, ToPILImage
+#cv2 imports
+import cv2
+import transform
+from transform import random_rotate90_transform2
+#the best part of the imports
+from architectures import *
+from dataset import *
+
 
 import configargparse
 import os
@@ -42,6 +63,9 @@ from post_process import parametric_pipeline
 import loss
 from loss import iou_metric, diagnose_errors, show_compare_gt, union_intersection, precision_at
 
+
+
+
 def get_checkpoint_file(args):
     return os.path.join(args.out_dir, 'model_save_%s.pth.tar' % args.experiment)
 
@@ -72,6 +96,7 @@ timeit._template_func = _template_func
 
 parser = configargparse.ArgumentParser(description='Data Science Bowl 2018')
 
+parser.add('--model', help='cnn/knn', type=str,required=True,default="")
 parser.add('--config', '-c', default='default.cfg', is_config_file=True, help='config file path [default: %(default)s])')
 parser.add('--data', '-d', metavar='DIR', default='/Users/stefan/Documents/nucleus/input/',
            help='path to dataset')
@@ -132,21 +157,20 @@ def save_checkpoint(
         model,
         optimizer,
         args,
-        it,
+        cfg,
         is_best=False,
         fname='model_save.pth.tar'):
 
-    global best_loss, best_it
     m_state_dict = model.state_dict()
     o_state_dict = optimizer.state_dict()
 
     torch.save({
         'args':args,
-        'it': it,
+        'it': cfg['it'],
         'model_state_dict': m_state_dict,
         'optimizer_state_dict': o_state_dict,
-        'best_loss': best_loss,
-        'best_it': best_it,
+        'best_loss': cfg['best_loss'],
+        'best_it': cfg['best_it'],
         'log': get_log()},
         fname)
     if is_best:
@@ -197,6 +221,28 @@ def load_checkpoint(model, optimizer, args, fname='model_best.pth.tar'):
             fname, checkpoint['it']))
     return it, new_args
 
+def torch_to_numpy(t):
+    return (t.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
+
+def validate_knn(model, loader, criterion):
+    running_loss = 0.0
+    cnt = 0
+    for i, (img, (labels, labels_seg)) in enumerate(loader):
+        p_img,p_seg,p_boundary,p_blend=model.predict(img)
+        torch_p_seg = torch.from_numpy(p_seg[None,:,:].astype(np.float)/255).float()
+        #torch_p_boundary = torch.from_numpy(p_boundary[None,:,:].astype(np.float)/255).float()
+        #torch_p_blend = torch.from_numpy(p_blend[None,:,:].astype(np.float)/255).float()
+        border=np.full((p_img.shape[0],5,3),255).astype(np.uint8)
+        cv2.imshow('img and reconstructed img',np.concatenate((torch_to_numpy(img),border,p_img),axis=1))
+        cv2.imshow('seg and reconstructed seg',np.concatenate((torch_to_numpy(labels_seg),border[:,:,:1],p_seg[:,:,None]),axis=1))
+        #cv2.imshow('pbound',p_boundary)
+        #cv2.imshow('pblend',p_blend)
+        cv2.waitKey(10)
+        loss = criterion(Variable(torch_p_seg), Variable(labels_seg.float()))
+        running_loss += loss.data[0]
+        cnt = cnt + 1
+    l = running_loss / cnt
+    return l
 
 def validate(model, loader, criterion):
     model.eval()
@@ -211,6 +257,42 @@ def validate(model, loader, criterion):
     l = running_loss / cnt
     return l
 
+def train_knn(
+        train_loader,
+        valid_loader,
+        model,
+        criterion,
+        optimizer,
+        scheduler,
+        epoch,
+        eval_every,
+        print_every,
+        save_every,
+        cfg):
+    running_loss = 0.0
+    cnt = 0
+    for cfg['it'], (img, (labels, labels_seg)) in tqdm(enumerate(train_loader, cfg['it'] + 1)):
+        model.prepare_fit(img,labels,labels_seg)
+
+        cnt = cnt + 1
+
+        if cnt > 0 and cfg['it'] % eval_every == 0:
+            model.fit()
+            l = validate_knn(model, valid_loader, criterion)
+            img,mask,boundary,blend=model.predict(img)
+            stats.append((it, running_loss / cnt, l))
+            running_loss = 0.0
+
+            if cnt > 0 and cfg['it'] % print_every == 0:
+                print('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f' %
+                      (epoch, cfg['it'], stats[-1][1], stats[-1][2]))
+            if it % save_every == 0:
+                is_best = False
+                if cfg['best_loss'] > l:
+                    cfg['best_loss'] = l
+                    cfg['best_it'] = cfg['it']
+                    is_best = True
+    return cfg['it'], cfg['best_loss'], cfg['best_it']
 
 def compute_iou(model, loader):
     model.eval()
@@ -240,6 +322,9 @@ def backprop_weight(labels, img, thresh=0.5):
 
     
 def train(
+#=======
+#def train_cnn(
+#>>>>>>> f2965c37c23acf81167fa205e7a02948e3f97513
         train_loader,
         valid_loader,
         model,
@@ -249,13 +334,18 @@ def train(
         epoch,
         eval_every,
         print_every,
-        save_every):
+        save_every,
+        cfg):
     running_loss = 0.0
     cnt = 0
+#<<<<<<< HEAD
     w_sum = 0.0
     w_cnt = 0
     global it, best_it, best_loss, args, lr
     for it, (img, (labels, labels_seg)) in tqdm(enumerate(train_loader, it + 1)):
+#=======
+    for cfg['it'], (img, (labels, labels_seg)) in tqdm(enumerate(train_loader, cfg['it'] + 1)):
+#>>>>>>> f2965c37c23acf81167fa205e7a02948e3f97513
         img, labels_seg = Variable(img), Variable(labels_seg)
         
         model.train(True)
@@ -278,30 +368,30 @@ def train(
         cnt = cnt + 1
 
         running_loss += loss.data[0]
-        if cnt > 0 and it % eval_every == 0:
+        if cnt > 0 and cfg['it'] % eval_every == 0:
 
             l = validate(model, valid_loader, criterion)
             train_loss = running_loss / cnt
-            insert_log(it, 'train_loss', train_loss)
-            insert_log(it, 'valid_loss', l)
+            insert_log(cfg['it'], 'train_loss', train_loss)
+            insert_log(cfg['it'], 'valid_loss', l)
             running_loss = 0.0
 
-            if cnt > 0 and it % print_every == 0:
+            if cnt > 0 and cfg['it'] % print_every == 0:
                 logging.info('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f' %
-                      (epoch, it, train_loss, l))
+                      (epoch, cfg['it'], train_loss, l))
                 save_plot(os.path.join(args.out_dir, 'progress.png'))
 
-            if it % save_every == 0:
+            if cfg['it'] % save_every == 0:
                 is_best = False
-                if best_loss > l:
-                    best_loss = l
-                    best_it = it
+                if cfg['best_loss'] > l:
+                    cfg['best_loss'] = l
+                    cfg['best_it'] = cfg['it']
                     is_best = True
                     save_checkpoint(
                         model,
                         optimizer,
                         args,
-                        it,
+                        cfg,
                         is_best,
                         get_checkpoint_file(args))
             cnt = 0
@@ -313,12 +403,12 @@ def train(
             #    lr = lr_new
             #    adjust_learning_rate(scheduler, lr)
             lr_new = get_learning_rate(scheduler.optimizer)
-            if lr_new != lr:
-                logging.info('[%d, %d]\tlearning rate changed from %f to %f' % (epoch, it, lr, lr_new))
-                lr = lr_new
-            insert_log(it, 'lr', get_learning_rate(scheduler.optimizer))
+            if lr_new != cfg['lr']:
+                logging.info('[%d, %d]\tlearning rate changed from %f to %f' % (epoch, cfg['it'], cfg['lr'], lr_new))
+                cfg['lr'] = lr_new
+            insert_log(cfg['it'], 'lr', get_learning_rate(scheduler.optimizer))
 
-    return it, best_loss, best_it
+    return cfg['it'], cfg['best_loss'], cfg['best_it']
 
 def baseline(
         train_loader,
@@ -352,7 +442,6 @@ def baseline(
     return running_loss/cnt, m
 
 
-
 #Note: for image and mask, there is no compatible solution that can use transforms.Compse(), see https://github.com/pytorch/vision/issues/9
 #transformations = transforms.Compose([random_rotate90_transform2(),transforms.ToTensor(),])
 
@@ -370,10 +459,13 @@ def train_transform(img, mask, mask_seg):
 
 
 def main():
-    global it, best_it, best_loss, LOG, args, lr
+    global it, best_it, best_loss, LOG, args
     args = parser.parse_args()
-
     args.override_model_opts = [x.replace('-','_') for x in args.override_model_opts]
+
+    if args.model not in ['knn','cnn']:
+        print "Only supported models are cnn or knn"
+        sys.exit(1)
 
     if args.out_dir is None:
        args.out_dir = 'experiments/%s' % args.experiment 
@@ -390,6 +482,7 @@ def main():
 
     if args.random_seed is not None:
         np.random.seed(args.random_seed)
+
     # create model
     model = CNN()
     it = 0
@@ -430,11 +523,33 @@ def main():
             raise ValueError('checkpoint already exists, exiting: %s' % ckpt_file)
         clear_log()
 
-    scheduler = ReduceLROnPlateau(optimizer, patience=args.patience, cooldown=args.cooldown, min_lr=args.min_lr, verbose=1)
+#
+#    cfg = {'it':0,'best_loss':1e20,'best_it':0,'lr':args.lr}
+#    # create model
+#    trainer=None
+#    model=None
+#    optimizer=None
+#    scheduler=None
+#    if args.model in ('knn',):
+#        trainer=train_knn
+#        model=KNN()
+#
+#    if args.model in ('cnn',):
+#        trainer=train_cnn
+#        model=CNN()
+#        optimizer = optim.Adam(model.parameters(), cfg['lr'],
+#                           #momentum=args.momentum,
+#                           weight_decay=args.weight_decay)
+#        scheduler = ReduceLROnPlateau(optimizer, patience=args.patience, cooldown=args.cooldown, min_lr=args.min_lr, verbose=1)
+#
+#     
+#    # define loss function (criterion) and optimizer
+#    criterion = nn.MSELoss()
+
 
     # Data loading
     logging.info('loading data')
-    #dset = NucleusDataset(args.data, args.stage, transform=train_transform)
+
     def load_data():
         return NucleusDataset(args.data, args.stage, transform=train_transform)
     timer = timeit.Timer(load_data)
@@ -446,7 +561,7 @@ def main():
     dset.data_df = dset.data_df[dset.data_df['size'] != (1388, 1040)]
 
     stratify = dset.data_df['images'].map(lambda x: '{}'.format(x.size))
-    train_dset, valid_dset = dset.train_test_split(test_size=args.valid_fraction, random_state=1, shuffle=True, stratify=stratify)
+    train_dset, valid_dset = dset.train_test_split(test_size=args.valid_fraction, random_state=1, shuffle=True) #, stratify=stratify)
     train_loader = DataLoader(train_dset, batch_size=1, shuffle=True)
     valid_loader = DataLoader(valid_dset, batch_size=1, shuffle=True)
 
@@ -465,7 +580,7 @@ def main():
 
 
     for epoch in range(args.epochs):
-        it, best_loss, best_it = train(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every)
+        it, best_loss, best_it = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every,cfg)
         logging.info('final best: it = %d, valid = %.5f' % (best_it, best_loss))
 
 

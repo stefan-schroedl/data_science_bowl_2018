@@ -5,7 +5,7 @@ import os
 import torch
 import pandas as pd
 import numpy as np
-
+import sys
 import random
 import math
 from functools import reduce
@@ -86,7 +86,9 @@ class NucleusDataset(Dataset):
                 '*',
                 '*',
                 '*'))
-        
+        if len(all_images)==0:
+            print "Failed to find any images :("
+            sys.exit(1)
         img_df = pd.DataFrame({'path': all_images})
 
         def img_id(in_path): return in_path.split('/')[-3]
@@ -144,7 +146,6 @@ class NucleusDataset(Dataset):
         masks_seg =  self.data_df["masks_seg"].iloc[idx]
         if self.transform:
             sample, masks, masks_seg = self.transform(sample, masks, masks_seg)
-
         return sample, (masks, masks_seg)
     
     
@@ -167,4 +168,3 @@ class NucleusDataset(Dataset):
         dset_test.data_df = df_test
 
         return dset_train, dset_test
-
