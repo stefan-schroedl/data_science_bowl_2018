@@ -219,17 +219,24 @@ def load_checkpoint(model, optimizer, args, fname='model_best.pth.tar'):
 def torch_to_numpy(t):
     return (t.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
 
+valn=0
 def validate_knn(model, loader, criterion):
     running_loss = 0.0
     cnt = 0
+    global valn
+    valn+=1
     for i, (img, (labels, labels_seg)) in enumerate(loader):
         p_img,p_seg,p_boundary,p_blend=model.predict(img)
         torch_p_seg = torch.from_numpy(p_seg[None,:,:].astype(np.float)/255).float()
         #torch_p_boundary = torch.from_numpy(p_boundary[None,:,:].astype(np.float)/255).float()
         #torch_p_blend = torch.from_numpy(p_blend[None,:,:].astype(np.float)/255).float()
         border=np.full((p_img.shape[0],5,3),255).astype(np.uint8)
-        cv2.imshow('img and reconstructed img',np.concatenate((torch_to_numpy(img),border,p_img),axis=1))
-        cv2.imshow('seg and reconstructed seg',np.concatenate((torch_to_numpy(labels_seg),border[:,:,:1],p_seg[:,:,None]),axis=1))
+        up=np.concatenate((torch_to_numpy(img),border,p_img,border,cv2.cvtColor(p_boundary,cv2.COLOR_GRAY2RGB)),axis=1)
+        borderh=np.full((5,up.shape[1],3),255).astype(np.uint8)
+        down=cv2.cvtColor(np.concatenate((torch_to_numpy(labels_seg),border[:,:,:1],p_seg[:,:,None],border[:,:,:1],p_blend[:,:,None]),axis=1),cv2.COLOR_GRAY2RGB)
+        whole=np.concatenate((up,borderh,down),axis=0)
+        cv2.imshow('wtf',whole)
+        cv2.imwrite('%d_%d.png' % (valn,i),whole)
         #cv2.imshow('pbound',p_boundary)
         #cv2.imshow('pblend',p_blend)
         cv2.waitKey(10)
