@@ -41,7 +41,7 @@ def insert_log(it, k, v):
     if len(LOG) > 0:
         last = LOG[-1]
         if last['it'] > it:
-            raise ValueError('trying to change history at %d, current is %d' % it, last['it'])
+            raise ValueError('trying to change history at %d, current is %d' % (it, last['it']))
         if last['it'] != it:
             last = {'it':it}
             LOG.append(last)

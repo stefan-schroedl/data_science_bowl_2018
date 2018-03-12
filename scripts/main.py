@@ -2,6 +2,7 @@
 import sys
 import os
 import shutil
+from collections import namedtuple
 from tqdm import tqdm
 from sklearn.neighbors import KNeighborsClassifier
 from KNN import *
@@ -64,8 +65,6 @@ import loss
 from loss import iou_metric, diagnose_errors, show_compare_gt, union_intersection, precision_at
 
 
-
-
 def get_checkpoint_file(args):
     return os.path.join(args.out_dir, 'model_save_%s.pth.tar' % args.experiment)
 
@@ -79,7 +78,7 @@ def save_plot(fname):
     fig.savefig(fname)
     plt.close(fig)
 
-    
+
 # https://stackoverflow.com/questions/24812253/how-can-i-capture-return-value-with-python-timeit-module
 def _template_func(setup, func):
     """Create a timer function. Used if the "statement" is a callable."""
@@ -96,7 +95,7 @@ timeit._template_func = _template_func
 
 parser = configargparse.ArgumentParser(description='Data Science Bowl 2018')
 
-parser.add('--model', help='cnn/knn', type=str,required=True,default="")
+parser.add('--model', help='cnn/knn', choices=['knn', 'cnn'], required=True, default="")
 parser.add('--config', '-c', default='default.cfg', is_config_file=True, help='config file path [default: %(default)s])')
 parser.add('--data', '-d', metavar='DIR', default='/Users/stefan/Documents/nucleus/input/',
            help='path to dataset')
@@ -131,6 +130,7 @@ parser.add('--optim', '-O', default='sgd', choices=['sgd','adam'],
            help='optimization algorithm [default: %(default)s]')
 parser.add('--valid-fraction', '-v', default=0.25, type=float,
            help='validation set fraction [default: %(default)s]')
+parser.add('--stratify', type=int, default=1, help='stratify train/test split according to image size [default: %(default)s]')
 parser.add('--print-every', '-p', default=10, type=int,
            metavar='N', help='print frequency [default: %(default)s]')
 parser.add('--save-every', '-S', default=10, type=int,
@@ -157,8 +157,8 @@ def save_checkpoint(
         model,
         optimizer,
         args,
-        cfg,
-        is_best=False,
+        global_state,
+        is_best = False,
         fname='model_save.pth.tar'):
 
     m_state_dict = model.state_dict()
@@ -166,11 +166,11 @@ def save_checkpoint(
 
     torch.save({
         'args':args,
-        'it': cfg['it'],
+        'it': global_state['it'],
         'model_state_dict': m_state_dict,
         'optimizer_state_dict': o_state_dict,
-        'best_loss': cfg['best_loss'],
-        'best_it': cfg['best_it'],
+        'best_loss': global_state['best_loss'],
+        'best_it': global_state['best_it'],
         'log': get_log()},
         fname)
     if is_best:
@@ -179,16 +179,20 @@ def save_checkpoint(
         shutil.copyfile(fname, '%s_best.pth.tar' % pref)
 
 
-def load_checkpoint(model, optimizer, args, fname='model_best.pth.tar'):
+def load_checkpoint(model,
+                    optimizer,
+                    global_state,
+                    fname='model_best.pth.tar'):
 
     if not os.path.isfile(fname):
         raise ValueError('checkpoint not found: %s', fname)
-        
+
     checkpoint = torch.load(fname)
-    it = checkpoint['it']
     set_log(checkpoint['log'])
-    best_it = checkpoint['best_it']
-    best_loss = checkpoint['best_loss']
+    global_state['it'] = checkpoint['it']
+
+    global_state['best_it'] = checkpoint['best_it']
+    global_state['best_loss'] = checkpoint['best_loss']
 
     if model:
         model.load_state_dict(checkpoint['model_state_dict'])
@@ -196,9 +200,10 @@ def load_checkpoint(model, optimizer, args, fname='model_best.pth.tar'):
     if optimizer:
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
-    if args:
+    if global_state['args']:
+        args = global_state['args']
         override = args.override_model_opts
-        
+
         old_args = checkpoint['args']
         new_args = copy.deepcopy(old_args)
 
@@ -216,10 +221,10 @@ def load_checkpoint(model, optimizer, args, fname='model_best.pth.tar'):
             if k not in old_args.__dict__:
                 new_args.__dict__[k] = args.__dict__[k]
 
+    global_state['args'] = new_args
     logging.info(
         "=> loaded checkpoint '{}' (iteration {})".format(
             fname, checkpoint['it']))
-    return it, new_args
 
 def torch_to_numpy(t):
     return (t.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
@@ -268,31 +273,31 @@ def train_knn(
         eval_every,
         print_every,
         save_every,
-        cfg):
+        global_state):
     running_loss = 0.0
     cnt = 0
-    for cfg['it'], (img, (labels, labels_seg)) in tqdm(enumerate(train_loader, cfg['it'] + 1)):
+    for global_state['it'], (img, (labels, labels_seg)) in tqdm(enumerate(train_loader, global_state['it'] + 1)):
         model.prepare_fit(img,labels,labels_seg)
 
         cnt = cnt + 1
 
-        if cnt > 0 and cfg['it'] % eval_every == 0:
+        if cnt > 0 and global_state['it'] % eval_every == 0:
             model.fit()
             l = validate_knn(model, valid_loader, criterion)
             img,mask,boundary,blend=model.predict(img)
             stats.append((it, running_loss / cnt, l))
             running_loss = 0.0
 
-            if cnt > 0 and cfg['it'] % print_every == 0:
+            if cnt > 0 and global_state['it'] % print_every == 0:
                 print('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f' %
-                      (epoch, cfg['it'], stats[-1][1], stats[-1][2]))
-            if it % save_every == 0:
+                      (epoch, global_state['it'], stats[-1][1], stats[-1][2]))
+            if global_state['it'] % save_every == 0:
                 is_best = False
-                if cfg['best_loss'] > l:
-                    cfg['best_loss'] = l
-                    cfg['best_it'] = cfg['it']
+                if global_state['best_loss'] > l:
+                    global_state['best_loss'] = l
+                    global_state['best_it'] = global_state['it']
                     is_best = True
-    return cfg['it'], cfg['best_loss'], cfg['best_it']
+    return global_state['it'], global_state['best_loss'], global_state['best_it']
 
 def compute_iou(model, loader):
     model.eval()
@@ -320,11 +325,8 @@ def backprop_weight(labels, img, thresh=0.5):
 
     return 1.0 / denom
 
-    
-def train(
-#=======
-#def train_cnn(
-#>>>>>>> f2965c37c23acf81167fa205e7a02948e3f97513
+
+def train_cnn(
         train_loader,
         valid_loader,
         model,
@@ -335,19 +337,18 @@ def train(
         eval_every,
         print_every,
         save_every,
-        cfg):
+        global_state):
+
     running_loss = 0.0
     cnt = 0
-#<<<<<<< HEAD
     w_sum = 0.0
     w_cnt = 0
-    global it, best_it, best_loss, args, lr
-    for it, (img, (labels, labels_seg)) in tqdm(enumerate(train_loader, it + 1)):
-#=======
-    for cfg['it'], (img, (labels, labels_seg)) in tqdm(enumerate(train_loader, cfg['it'] + 1)):
-#>>>>>>> f2965c37c23acf81167fa205e7a02948e3f97513
+
+    # global it, best_it, best_loss, args, lr
+
+    for global_state['it'], (img, (labels, labels_seg)) in tqdm(enumerate(train_loader, global_state['it'] + 1)):
         img, labels_seg = Variable(img), Variable(labels_seg)
-        
+
         model.train(True)
 
         outputs = model(img)
@@ -368,32 +369,32 @@ def train(
         cnt = cnt + 1
 
         running_loss += loss.data[0]
-        if cnt > 0 and cfg['it'] % eval_every == 0:
+        if cnt > 0 and global_state['it'] % eval_every == 0:
 
             l = validate(model, valid_loader, criterion)
             train_loss = running_loss / cnt
-            insert_log(cfg['it'], 'train_loss', train_loss)
-            insert_log(cfg['it'], 'valid_loss', l)
+            insert_log(global_state['it'], 'train_loss', train_loss)
+            insert_log(global_state['it'], 'valid_loss', l)
             running_loss = 0.0
 
-            if cnt > 0 and cfg['it'] % print_every == 0:
+            if cnt > 0 and global_state['it'] % print_every == 0:
                 logging.info('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f' %
-                      (epoch, cfg['it'], train_loss, l))
-                save_plot(os.path.join(args.out_dir, 'progress.png'))
+                      (epoch, global_state['it'], train_loss, l))
+                save_plot(os.path.join(global_state['args'].out_dir, 'progress.png'))
 
-            if cfg['it'] % save_every == 0:
+            if global_state['it'] % save_every == 0:
                 is_best = False
-                if cfg['best_loss'] > l:
-                    cfg['best_loss'] = l
-                    cfg['best_it'] = cfg['it']
+                if global_state['best_loss'] > l:
+                    global_state['best_loss'] = l
+                    global_state['best_it'] = global_state['it']
                     is_best = True
                     save_checkpoint(
                         model,
                         optimizer,
-                        args,
-                        cfg,
+                        global_state['args'],
+                        global_state,
                         is_best,
-                        get_checkpoint_file(args))
+                        get_checkpoint_file(global_state['args']))
             cnt = 0
 
             scheduler.step(train_loss)
@@ -403,19 +404,20 @@ def train(
             #    lr = lr_new
             #    adjust_learning_rate(scheduler, lr)
             lr_new = get_learning_rate(scheduler.optimizer)
-            if lr_new != cfg['lr']:
-                logging.info('[%d, %d]\tlearning rate changed from %f to %f' % (epoch, cfg['it'], cfg['lr'], lr_new))
-                cfg['lr'] = lr_new
-            insert_log(cfg['it'], 'lr', get_learning_rate(scheduler.optimizer))
+            if lr_new != global_state['lr']:
+                logging.info('[%d, %d]\tlearning rate changed from %f to %f' % (epoch, global_state['it'], global_state['lr'], lr_new))
+                global_state['lr'] = lr_new
+            insert_log(global_state['it'], 'lr', get_learning_rate(scheduler.optimizer))
 
-    return cfg['it'], cfg['best_loss'], cfg['best_it']
+    return global_state['it'], global_state['best_loss'], global_state['best_it']
+
 
 def baseline(
         train_loader,
         valid_loader,
         criterion,
         it):
-    
+
     m = 0.0
     cnt = 0.0
     for i, (img, (labels, labels_seg)) in enumerate(train_loader):
@@ -426,14 +428,14 @@ def baseline(
     m = m / cnt
 
     running_loss = 0.0
-    
+
     cnt = 0
     for i, (img, (labels,labels_seg)) in enumerate(valid_loader):
-        outputs = labels_seg.clone()        
+        outputs = labels_seg.clone()
         outputs = torch.clamp(outputs, m, m)
         img, labels = Variable(img), Variable(labels_seg)
         outputs = Variable(outputs)
-    
+
         loss = criterion(outputs, labels_seg)
 
         running_loss += loss.data[0]
@@ -459,16 +461,12 @@ def train_transform(img, mask, mask_seg):
 
 
 def main():
-    global it, best_it, best_loss, LOG, args
+    # global it, best_it, best_loss, LOG, args
     args = parser.parse_args()
     args.override_model_opts = [x.replace('-','_') for x in args.override_model_opts]
 
-    if args.model not in ['knn','cnn']:
-        print "Only supported models are cnn or knn"
-        sys.exit(1)
-
     if args.out_dir is None:
-       args.out_dir = 'experiments/%s' % args.experiment 
+       args.out_dir = 'experiments/%s' % args.experiment
     mkdir_p(args.out_dir)
 
     # for later info, save the current configuration
@@ -483,13 +481,39 @@ def main():
     if args.random_seed is not None:
         np.random.seed(args.random_seed)
 
-    # create model
-    model = CNN()
-    it = 0
-    best_loss = 1e20
-    best_it = 0
+    global_state = {'it':0, 'best_loss':1e20, 'best_it':0, 'lr':args.lr, 'args':args}
 
-    # define loss function (criterion) and optimizer
+    # create model
+
+    trainer = None
+    model = None
+    optimizer = None
+    scheduler = None
+    if args.model == 'knn':
+        trainer = train_knn
+        model = KNN()
+
+    elif args.model == 'cnn':
+        trainer=train_cnn
+        model = CNN()
+    else:
+        raise ValueError("Only supported models are cnn or knn")
+
+    # set up optimizer
+    if args.optim == 'adam':
+        optimizer = optim.Adam(model.parameters(), args.lr,
+                           weight_decay = args.weight_decay)
+    elif args.optim == 'sgd':
+        optimizer = optim.SGD(model.parameters(), args.lr,
+                           momentum = args.momentum,
+                           weight_decay = args.weight_decay)
+    else:
+        raise ValueError('unknown optimization: %s' % args.optim)
+
+    scheduler = ReduceLROnPlateau(optimizer, patience=args.patience, cooldown=args.cooldown, min_lr=args.min_lr, verbose=1)
+
+
+    # define loss function (criterion)
     if args.criterion == 'mse':
         criterion = nn.MSELoss()
     elif args.criterion == 'bce':
@@ -501,20 +525,11 @@ def main():
     else:
         raise ValueError('unknown criterion: %s' % args.criterion)
 
-    lr = args.lr
-    if args.optim == 'adam':
-        optimizer = optim.Adam(model.parameters(), lr,
-                           weight_decay=args.weight_decay)
-    elif args.optim == 'sgd':
-        optimizer = optim.SGD(model.parameters(), lr,
-                           momentum=args.momentum,
-                           weight_decay=args.weight_decay)
-    else:
-        raise ValueError('unknown optimization: %s' % args.optim)
-
     # optionally resume from a checkpoint
     if args.resume:
-        it, args = load_checkpoint(model, optimizer, args, args.resume)
+        load_checkpoint(model, optimizer, global_state, args.resume)
+        # make sure args here is consistent with possibly updated global_state['args']!
+        args = global_state['args']
         args.force_overwrite = 1
     else:
         # prevent accidental overwriting
@@ -523,29 +538,8 @@ def main():
             raise ValueError('checkpoint already exists, exiting: %s' % ckpt_file)
         clear_log()
 
-#
-#    cfg = {'it':0,'best_loss':1e20,'best_it':0,'lr':args.lr}
-#    # create model
-#    trainer=None
-#    model=None
-#    optimizer=None
-#    scheduler=None
-#    if args.model in ('knn',):
-#        trainer=train_knn
-#        model=KNN()
-#
-#    if args.model in ('cnn',):
-#        trainer=train_cnn
-#        model=CNN()
-#        optimizer = optim.Adam(model.parameters(), cfg['lr'],
-#                           #momentum=args.momentum,
-#                           weight_decay=args.weight_decay)
-#        scheduler = ReduceLROnPlateau(optimizer, patience=args.patience, cooldown=args.cooldown, min_lr=args.min_lr, verbose=1)
-#
-#     
-#    # define loss function (criterion) and optimizer
-#    criterion = nn.MSELoss()
-
+    # define loss function (criterion)
+    criterion = nn.MSELoss()
 
     # Data loading
     logging.info('loading data')
@@ -556,12 +550,14 @@ def main():
     t,dset = timer.timeit(number=1)
     logging.info('load time: %.1f' % t)
 
-            
+
     # hack: this image format (1388, 1040) occurs only ones, stratify complains ..
     dset.data_df = dset.data_df[dset.data_df['size'] != (1388, 1040)]
 
-    stratify = dset.data_df['images'].map(lambda x: '{}'.format(x.size))
-    train_dset, valid_dset = dset.train_test_split(test_size=args.valid_fraction, random_state=1, shuffle=True) #, stratify=stratify)
+    stratify = None
+    if args.stratify > 0:
+        stratify = dset.data_df['images'].map(lambda x: '{}'.format(x.size))
+    train_dset, valid_dset = dset.train_test_split(test_size=args.valid_fraction, random_state=1, shuffle=True, stratify=stratify)
     train_loader = DataLoader(train_dset, batch_size=1, shuffle=True)
     valid_loader = DataLoader(valid_dset, batch_size=1, shuffle=True)
 
@@ -580,7 +576,7 @@ def main():
 
 
     for epoch in range(args.epochs):
-        it, best_loss, best_it = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every,cfg)
+        it, best_loss, best_it = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
         logging.info('final best: it = %d, valid = %.5f' % (best_it, best_loss))
 
 
