@@ -5,7 +5,7 @@ from sklearn.feature_extraction.image import reconstruct_from_patches_2d
 import cv2
 
 class KNN():
-    def __init__(self,n=5,patch_size=13,sample=1000):
+    def __init__(self,n=5,patch_size=13,sample=100):
         self.n=5
         self.patch_size=patch_size
         self.model =  KNeighborsClassifier(n_neighbors=n,n_jobs=-1,algorithm='kd_tree') 
@@ -60,7 +60,7 @@ class KNN():
     def predict(self,img):
 	img = (img.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
         cv2.imshow('predict img in',img)
-        cv2.waitKey(1000)
+        cv2.waitKey(1)
         #img=img.numpy()[0]
         height,width,channels = img.shape
         img_patches = extract_patches_2d(img, (self.patch_size,self.patch_size)).astype(np.float64)
