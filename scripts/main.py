@@ -13,6 +13,8 @@ import numpy as np
 
 import torch
 from torch import optim, nn
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+
 from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
 
@@ -31,7 +33,9 @@ from dataset import NucleusDataset
 import architectures
 from architectures import CNN
 from utils import mkdir_p, csv_list, strip_end, init_logging, get_log, set_log, clear_log, insert_log, get_latest_log, get_history_log
-from adjust_learn_rate import ReduceLROnPlateau, adjust_learning_rate
+from adjust_learn_rate import get_learning_rate
+
+
 
 import post_process
 from post_process import parametric_pipeline
@@ -103,7 +107,9 @@ parser.add('--eval-every', default=10, type=int,
            metavar='N', help='eval frequency [default: %(default)s]')
 parser.add('--patience', default=10, type=int,
            metavar='N', help='patience for lr scheduler [default: %(default)s]')
-parser.add('--min_lr', default=0.0001, type=float,
+parser.add('--cooldown', default=5, type=int,
+           metavar='N', help='cooldown for lr scheduler [default: %(default)s]')
+parser.add('--min_lr', default=0.00001, type=float,
            metavar='N', help='minimum learn rate for scheduler [default: %(default)s]')
 parser.add('--resume', default='', type=str, metavar='PATH',
            help='path to latest checkpoint [default: %(default)s]')
@@ -217,13 +223,14 @@ def train(
         model,
         criterion,
         optimizer,
+        scheduler,
         epoch,
         eval_every,
         print_every,
         save_every):
     running_loss = 0.0
     cnt = 0
-    global it, best_it, best_loss, args, lr, lr_scheduler
+    global it, best_it, best_loss, args, lr
     for it, (img, (labels, labels_seg)) in tqdm(enumerate(train_loader, it + 1)):
         img, labels_seg = Variable(img), Variable(labels_seg)
         
@@ -264,12 +271,18 @@ def train(
                         is_best,
                         get_checkpoint_file(args))
             cnt = 0
-                        
-            lr_new = lr_scheduler.on_epoch_end(it, lr, train_loss)
+
+            scheduler.step(train_loss)
+
+            #lr_new = lr_scheduler.on_epoch_end(it, lr, train_loss)
+            #if lr_new != lr:
+            #    lr = lr_new
+            #    adjust_learning_rate(scheduler, lr)
+            lr_new = get_learning_rate(scheduler.optimizer)
             if lr_new != lr:
+                logging.info('[%d, %d]\tlearning rate changed from %f to %f' % (epoch, it, lr, lr_new))
                 lr = lr_new
-                adjust_learning_rate(optimizer, lr)
-            insert_log(it, 'lr', lr)
+            insert_log(it, 'lr', get_learning_rate(scheduler.optimizer))
 
     return it, best_loss, best_it
 
@@ -326,7 +339,7 @@ def train_transform(img, mask, mask_seg):
 
 
 def main():
-    global it, best_it, best_loss, LOG, args, lr_scheduler, lr
+    global it, best_it, best_loss, LOG, args, lr
     args = parser.parse_args()
 
     if args.out_dir is None:
@@ -369,6 +382,8 @@ def main():
             raise ValueError('checkpoint already exists, exiting: %s' % ckpt_file)
         clear_log()
 
+    scheduler = ReduceLROnPlateau(optimizer, patience=args.patience, cooldown=args.cooldown, min_lr=args.min_lr, verbose=1)
+
     # Data loading
     logging.info('loading data')
     #dset = NucleusDataset(args.data, args.stage, transform=train_transform)
@@ -398,10 +413,10 @@ def main():
         l = validate(model, valid_loader, criterion)
         logging.info('validation for loaded model: %s' % l)
 
-    lr_scheduler = ReduceLROnPlateau(patience=args.patience, verbose=1)
+
 
     for epoch in range(args.epochs):
-        it, best_loss, best_it = train(train_loader, valid_loader, model, criterion, optimizer, epoch, args.eval_every, args.print_every, args.save_every)
+        it, best_loss, best_it = train(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every)
         logging.info('final best: it = %d, valid = %.5f' % (best_it, best_loss))
 
 
