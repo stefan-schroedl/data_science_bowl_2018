@@ -8,7 +8,7 @@ import faiss
 class KNN():
     def __init__(self,n=5,patch_size=13,sample=100,gauss_blur=False,similarity=False,normalize=True):
         self.n=5
-        self.channels=7
+        self.channels=8
         self.patch_size=patch_size
         self.model =  KNeighborsClassifier(n_neighbors=n,n_jobs=-1,algorithm='kd_tree') 
         self.sample = sample
@@ -31,12 +31,22 @@ class KNN():
         mask_seg = (mask_seg.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
 
         super_boundary = mask.copy()[:,:,0]*0
+        super_boundary_2 = mask.copy()[:,:,0]*0
         max_components=mask.max()
+        kernel = np.ones((5,5), np.uint8)
         for x in xrange(max_components):
             this_one = ((mask==(x+1))*255).astype(np.uint8)[:,:,0]
             boundary = cv2.Laplacian(this_one,cv2.CV_8U,ksize=3)
             super_boundary = np.maximum(super_boundary,boundary)
-        #cv2.imshow('super_boundary',super_boundary)
+            boundary = cv2.dilate(boundary, kernel, iterations=1)
+            _,boundary_thresh = cv2.threshold(boundary,100,255,cv2.THRESH_BINARY)
+            super_boundary_2 += boundary_thresh/255
+        #print "X",super_boundary_2.max()
+        super_boundary_2 = (super_boundary_2>1)*255
+        #print super_boundary_2.sum(),super_boundary_2.max()
+        #super_boundary_2 = np.minimum(super_boundary_2,3)
+        #super_boundary_2 *= 85
+        #cv2.imshow('super_boundary',super_boundary_2.astype(np.uint8))
         #cv2.imshow('mask',mask)
         #cv2.imshow('seg',mask_seg)
         #cv2.waitKey(1000)
@@ -53,7 +63,7 @@ class KNN():
         boundary = cv2.Laplacian(mask_seg,cv2.CV_8U,ksize=3)
         boundary = boundary.reshape(boundary.shape[0],boundary.shape[1],1)
         assert(boundary.max()<=255)
-        stacked_img = np.concatenate((img,mask_seg,boundary,np.maximum(mask_seg/2,boundary),super_boundary[:,:,None]),axis=2)
+        stacked_img = np.concatenate((img,mask_seg,boundary,np.maximum(mask_seg/2,boundary),super_boundary[:,:,None],super_boundary_2[:,:,None]),axis=2)
         data_patches = extract_patches_2d(stacked_img, (self.patch_size,self.patch_size) ,random_state=1000,max_patches=self.sample).astype(np.float64)
         #if self.patches.ndim==1:
         #    self.patches = data_patches.copy().reshape(data_patches.shape[0], -1)
@@ -127,6 +137,7 @@ class KNN():
 	reconstructed_boundary = reconstructed[:,:,4].astype(np.uint8)
 	reconstructed_blend = reconstructed[:,:,5].astype(np.uint8)
 	reconstructed_super_boundary = reconstructed[:,:,6].astype(np.uint8)
-        return reconstructed_img,reconstructed_mask,reconstructed_boundary,reconstructed_blend,reconstructed_super_boundary
+	reconstructed_super_boundary_2 = reconstructed[:,:,7].astype(np.uint8)
+        return reconstructed_img,reconstructed_mask,reconstructed_boundary,reconstructed_blend,reconstructed_super_boundary,reconstructed_super_boundary_2
         
         
