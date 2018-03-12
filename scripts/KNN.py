@@ -5,22 +5,22 @@ from sklearn.feature_extraction.image import reconstruct_from_patches_2d
 import cv2
 
 class KNN():
-    def __init__(self,n=5,patch_size=13,sample=100):
+    def __init__(self,n=5,patch_size=13,sample=100,gauss_blur=False,similarity=False,normalize=True):
         self.n=5
         self.patch_size=patch_size
         self.model =  KNeighborsClassifier(n_neighbors=n,n_jobs=-1,algorithm='kd_tree') 
         self.sample = sample
         self.patches = np.array([]) 
         self.patches_3d = np.array([])
-	self.normalize = True
+	self.normalize = normalize
 	gkernel=cv2.getGaussianKernel(ksize=patch_size,sigma=1)
 	gkernel=gkernel*gkernel.T
 	gkernel=gkernel.reshape(patch_size,patch_size,1)
 	gkernel=np.concatenate((gkernel,gkernel,gkernel,gkernel,gkernel,gkernel),axis=2)
 	gkernel=gkernel.reshape(-1)*self.patch_size*self.patch_size
         self.gkernel=gkernel
-        self.similarity=False
-        self.gauss_blur=False
+        self.similarity=similarity
+        self.gauss_blur=gauss_blur
 
     def prepare_fit(self,img,mask,mask_seg):
 	img = (img.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)

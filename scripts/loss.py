@@ -57,6 +57,9 @@ def union_intersection(labels, y_pred, exclude_bg=True):
 
 def iou_metric(labels, y_pred, print_table=False):
 
+    if labels.min() == labels.max():
+        return 0.0
+
     union, intersection, _, _ = union_intersection(labels, y_pred)
 
     # Compute the intersection over union

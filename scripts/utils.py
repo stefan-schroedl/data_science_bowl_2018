@@ -7,6 +7,9 @@ Takes only 200 seconds to process 5635 mask files
 import math
 import numpy as np
 import os
+import logging
+import socket
+import errno
 import skimage
 from skimage import img_as_float, exposure
 from skimage.io import imread
@@ -15,6 +18,87 @@ import matplotlib.pyplot as plt
 import torch
 import torchvision
 from torchvision.transforms import ToPILImage
+
+
+
+def clear_log():
+    global LOG
+    LOG = []
+
+def get_log():
+    global LOG
+    return LOG
+
+def set_log(l):
+    global LOG
+    LOG = l
+
+def insert_log(it, k, v):
+    global LOG
+    if len(LOG) > 0:
+        last = LOG[-1]
+        if last['it'] > it:
+            raise ValueError('trying to change history at %d, current is %d' % it, last['it'])
+        if last['it'] != it:
+            last = {'it':it}
+            LOG.append(last)
+    else:
+        last = {'it':it}
+        LOG = [last]
+    last[k] = v
+
+def get_latest_log(what):
+    global LOG
+    last = LOG[-1]
+    if not what in last:
+        raise ValueError('no such key in log: %s' % what)
+    return last[what]
+
+
+def get_history_log(what):
+    global LOG
+    vals = [x[what] for x in LOG if what in x]
+    its = [x['it'] for x in LOG if what in x]
+    return vals, its
+
+
+def init_logging(opts={}):
+    filename = None
+    if hasattr(opts, 'log_file') and opts.log_file:
+        # slight hack: dollar signs work if config file is read by shell, here we need to strip it
+        # another slight hack: sometimes HOSTNAME is not set
+        if not 'HOSTNAME' in os.environ.keys():
+            os.environ['HOSTNAME'] = socket.gethostname()
+        filename = opts.log_file.replace('$','').format(**os.environ)
+    verbose = False
+    if hasattr(opts, 'verbose'):
+        verbose = opts.verbose
+    logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO, format="[%(asctime)s\t%(process)d\t%(levelname)s]\t%(message\
+)s", datefmt="%Y%m%d %H:%M:%S", filename=filename)
+
+
+
+def strip_end(text, suffix):
+    if not text.endswith(suffix):
+        return text
+    return text[:len(text)-len(suffix)]
+
+
+# auxiliary class for comma-delimited command line arguments
+def csv_list(init):
+    l=init.split(',')
+    l = [x.strip() for x in l if len(x)]
+    return l
+
+def mkdir_p(path):
+    try:
+        os.makedirs(path)
+        return 0
+    except OSError as exc:  # Python >2.5
+        if exc.errno == errno.EEXIST and os.path.isdir(path):
+            return 1
+        else:
+            raise
 
 #https://stackoverflow.com/questions/394770/override-a-method-at-instance-level
 def monkeypatch(obj, fn_name, new_fn):
@@ -41,9 +125,9 @@ def monkeypatch(obj, fn_name, new_fn):
 def is_inverted(img,invert_thresh_pd=10.0):
     img_grey = img_as_ubyte(rgb2grey(img))
     img_th = cv2.threshold(img_grey,0,255,cv2.THRESH_OTSU)[1]
-    
+
     return np.sum(img_th==255)>((invert_thresh_pd/10.0)*np.sum(img_th==0))
-        
+
 # RLE encoding
 
 def rle_encoding(x):
