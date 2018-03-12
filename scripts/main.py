@@ -226,20 +226,22 @@ def validate_knn(model, loader, criterion):
     global valn
     valn+=1
     for i, (img, (labels, labels_seg)) in enumerate(loader):
-        p_img,p_seg,p_boundary,p_blend=model.predict(img)
+        p_img,p_seg,p_boundary,p_blend,p_super_boundary=model.predict(img)
         torch_p_seg = torch.from_numpy(p_seg[None,:,:].astype(np.float)/255).float()
         #torch_p_boundary = torch.from_numpy(p_boundary[None,:,:].astype(np.float)/255).float()
         #torch_p_blend = torch.from_numpy(p_blend[None,:,:].astype(np.float)/255).float()
+        _,p_super_boundary_thresh = cv2.threshold(p_super_boundary,20,255,cv2.THRESH_BINARY)
         border=np.full((p_img.shape[0],5,3),255).astype(np.uint8)
-        up=np.concatenate((torch_to_numpy(img),border,p_img,border,cv2.cvtColor(p_boundary,cv2.COLOR_GRAY2RGB)),axis=1)
+        up=np.concatenate((torch_to_numpy(img),border,p_img,border,cv2.cvtColor(p_boundary,cv2.COLOR_GRAY2RGB),border,cv2.cvtColor(p_blend,cv2.COLOR_GRAY2RGB)),axis=1)
         borderh=np.full((5,up.shape[1],3),255).astype(np.uint8)
-        down=cv2.cvtColor(np.concatenate((torch_to_numpy(labels_seg),border[:,:,:1],p_seg[:,:,None],border[:,:,:1],p_blend[:,:,None]),axis=1),cv2.COLOR_GRAY2RGB)
+        down=cv2.cvtColor(np.concatenate((torch_to_numpy(labels_seg),border[:,:,:1],p_seg[:,:,None],border[:,:,:1],p_super_boundary_thresh[:,:,None],border[:,:,:1],p_super_boundary[:,:,None]),axis=1),cv2.COLOR_GRAY2RGB)
         whole=np.concatenate((up,borderh,down),axis=0)
-        cv2.imshow('wtf',whole)
+        #cv2.imshow('wtf',whole)
         cv2.imwrite('%d_%d.png' % (valn,i),whole)
+        print valn,i
         #cv2.imshow('pbound',p_boundary)
         #cv2.imshow('pblend',p_blend)
-        cv2.waitKey(10)
+        #cv2.waitKey(10)
         loss = criterion(Variable(torch_p_seg), Variable(labels_seg.float()))
         running_loss += loss.data[0]
         cnt = cnt + 1
@@ -273,6 +275,7 @@ def train_knn(
         cfg):
     running_loss = 0.0
     cnt = 0
+    stats=[]
     for cfg['it'], (img, (labels, labels_seg)) in tqdm(enumerate(train_loader, cfg['it'] + 1)):
         model.prepare_fit(img,labels,labels_seg)
 
@@ -282,7 +285,7 @@ def train_knn(
             model.fit()
             l = validate_knn(model, valid_loader, criterion)
             img,mask,boundary,blend=model.predict(img)
-            stats.append((it, running_loss / cnt, l))
+            stats.append((cfg[']it'], running_loss / cnt, l))
             running_loss = 0.0
 
             if cnt > 0 and cfg['it'] % print_every == 0:
