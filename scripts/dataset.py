@@ -29,6 +29,8 @@ from sklearn.model_selection import train_test_split as train_test_split_sk
 
 import cv2
 
+import tqdm
+
 class NucleusDataset(Dataset):
     """Nucleus dataset."""
 
@@ -165,3 +167,4 @@ class NucleusDataset(Dataset):
         dset_test.data_df = df_test
 
         return dset_train, dset_test
+

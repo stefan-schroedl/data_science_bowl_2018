@@ -57,7 +57,7 @@ def union_intersection(labels, y_pred, exclude_bg=True):
 
 def iou_metric(labels, y_pred, print_table=False):
 
-    if labels.min() == labels.max():
+    if labels.max() == 0:
         return 0.0
 
     union, intersection, _, _ = union_intersection(labels, y_pred)
@@ -179,6 +179,7 @@ def show_compare_gt(img, masks, thresh=0.5, **opts):
     plt.show()
     return diagnose_errors(masks, pred_masks, thresh, print_message=True)
 
+    
 #####
 
 class DiceLoss(nn.Module):
@@ -203,6 +204,14 @@ class JaccardLoss(nn.Module):
         prod = torch.sum(prediction * target)
         return 1 - 2 * (prod + 1.0) / (torch.sum(prediction) + torch.sum(target) - prod + 1.0)
 
+    
+##  http://geek.csdn.net/news/detail/126833
+def weighted_binary_cross_entropy_with_logits(logits, labels, weights):
+
+    loss = weights*(logits.clamp(min=0) - logits*labels + torch.log(1 + torch.exp(-logits.abs())))
+    loss = loss.sum()/(weights.sum()+1e-12)
+
+    return loss
 
 def segmentation_loss(output, target):
     bce = nn.BCEWithLogitsLoss()

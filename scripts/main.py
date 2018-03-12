@@ -39,7 +39,8 @@ from adjust_learn_rate import get_learning_rate
 
 import post_process
 from post_process import parametric_pipeline
-from loss import iou_metric, diagnose_errors, show_compare_gt
+import loss
+from loss import iou_metric, diagnose_errors, show_compare_gt, union_intersection, precision_at
 
 def get_checkpoint_file(args):
     return os.path.join(args.out_dir, 'model_save_%s.pth.tar' % args.experiment)
@@ -93,10 +94,16 @@ parser.add('-b', '--batch-size', default=256, type=int,
            metavar='N', help='mini-batch size (default: 256)')
 parser.add('--lr', '--learning-rate', default=0.001, type=float,
            metavar='LR', help='initial learning rate [default: %(default)s]')
+parser.add('--min_lr', default=0.00001, type=float,
+           metavar='N', help='minimum learn rate for scheduler [default: %(default)s]')
 parser.add('--momentum', '-m', default=0.9, type=float, metavar='M',
            help='momentum [default: %(default)s]')
-parser.add('--weight-decay', '--wd', default=1e-4, type=float,
+parser.add('--weight-decay', default=1e-4, type=float,
            metavar='W', help='weight decay [default: %(default)s]')
+parser.add('--criterion', '-C', default='mse', choices=['mse','bce','jaccard','dice'],
+           metavar='C', help='loss function [default: %(default)s]')
+parser.add('--optim', '-O', default='sgd', choices=['sgd','adam'],
+           help='optimization algorithm [default: %(default)s]')
 parser.add('--valid-fraction', '-v', default=0.25, type=float,
            help='validation set fraction [default: %(default)s]')
 parser.add('--print-every', '-p', default=10, type=int,
@@ -109,11 +116,9 @@ parser.add('--patience', default=10, type=int,
            metavar='N', help='patience for lr scheduler [default: %(default)s]')
 parser.add('--cooldown', default=5, type=int,
            metavar='N', help='cooldown for lr scheduler [default: %(default)s]')
-parser.add('--min_lr', default=0.00001, type=float,
-           metavar='N', help='minimum learn rate for scheduler [default: %(default)s]')
 parser.add('--resume', default='', type=str, metavar='PATH',
            help='path to latest checkpoint [default: %(default)s]')
-parser.add('--override-model-opts', type=csv_list, default='override_model_opts,resume,save_every',
+parser.add('--override-model-opts', type=csv_list, default='override-model-opts,resume,save-every',
            help='when resuming, change these options [default: %(default)s]')
 parser.add('--evaluate', '-E', dest='evaluate', action='store_true',
            help='evaluate model on validation set')
@@ -213,10 +218,27 @@ def compute_iou(model, loader):
     img_th = [(parametric_pipeline(img, circle_size=4), mask) for img, mask in pred]
     ious = [iou_metric(i,m) for (i,m) in img_th]
     msg = 'iou: mean = %.5f, med = %.5f' % (np.mean(ious), np. median(ious))
-    print msg
     logging.info(msg)
+    print msg
 
 
+def backprop_weight(labels, img, thresh=0.5):
+    img_th = parametric_pipeline(img, circle_size=4)
+    union, intersection, area_true, area_pred = union_intersection(labels, img_th)
+
+    # Compute the intersection over union
+    iou = intersection.astype(float) / union
+
+    tp, fp, fn, matches_by_pred, matches_by_target = precision_at(iou, thresh)
+
+    denom = 1.0 * (tp + fp + fn)
+
+    if denom == 0.0:
+        return 0.001
+
+    return 1.0 / denom
+
+    
 def train(
         train_loader,
         valid_loader,
@@ -230,6 +252,8 @@ def train(
         save_every):
     running_loss = 0.0
     cnt = 0
+    w_sum = 0.0
+    w_cnt = 0
     global it, best_it, best_loss, args, lr
     for it, (img, (labels, labels_seg)) in tqdm(enumerate(train_loader, it + 1)):
         img, labels_seg = Variable(img), Variable(labels_seg)
@@ -237,6 +261,16 @@ def train(
         model.train(True)
 
         outputs = model(img)
+        w = backprop_weight(labels.numpy(), outputs.data[0].numpy())
+        w_cnt += 1
+        w_sum += w
+        if w_cnt > 5:
+            w = w * w_cnt / w_sum
+            #print w_sum/w_cnt
+        else:
+            w = 1.0
+        criterion._buffers['weights'] = torch.FloatTensor([w])
+
         loss = criterion(outputs, labels_seg)
         optimizer.zero_grad()
         loss.backward()
@@ -335,12 +369,11 @@ def train_transform(img, mask, mask_seg):
     return img, mask, mask_seg
 
 
-#NucleusDataset(args.data, args.stage, transform=train_transform)
-
-
 def main():
     global it, best_it, best_loss, LOG, args, lr
     args = parser.parse_args()
+
+    args.override_model_opts = [x.replace('-','_') for x in args.override_model_opts]
 
     if args.out_dir is None:
        args.out_dir = 'experiments/%s' % args.experiment 
@@ -362,14 +395,29 @@ def main():
     it = 0
     best_loss = 1e20
     best_it = 0
-     
+
     # define loss function (criterion) and optimizer
-    criterion = nn.MSELoss()
+    if args.criterion == 'mse':
+        criterion = nn.MSELoss()
+    elif args.criterion == 'bce':
+        criterion = nn.BCEWithLogitsLoss(torch.ones((1)))
+    elif args.criterion == 'dice':
+        criterion = loss.DiceLoss()
+    elif args.criterion == 'jaccard':
+        criterion = loss.JaccardLoss()
+    else:
+        raise ValueError('unknown criterion: %s' % args.criterion)
 
     lr = args.lr
-    optimizer = optim.Adam(model.parameters(), lr,
-                           #momentum=args.momentum,
+    if args.optim == 'adam':
+        optimizer = optim.Adam(model.parameters(), lr,
                            weight_decay=args.weight_decay)
+    elif args.optim == 'sgd':
+        optimizer = optim.SGD(model.parameters(), lr,
+                           momentum=args.momentum,
+                           weight_decay=args.weight_decay)
+    else:
+        raise ValueError('unknown optimization: %s' % args.optim)
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -393,6 +441,7 @@ def main():
     t,dset = timer.timeit(number=1)
     logging.info('load time: %.1f' % t)
 
+            
     # hack: this image format (1388, 1040) occurs only ones, stratify complains ..
     dset.data_df = dset.data_df[dset.data_df['size'] != (1388, 1040)]
 

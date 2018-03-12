@@ -4,6 +4,8 @@ Fast inplementation of Run-Length Encoding algorithm
 Takes only 200 seconds to process 5635 mask files
 '''
 
+import sys
+import traceback
 import math
 import numpy as np
 import os
@@ -19,7 +21,8 @@ import torch
 import torchvision
 from torchvision.transforms import ToPILImage
 
-
+def exceptions_str():
+        return traceback.format_exception_only(sys.exc_info()[0], sys.exc_info()[1])[0].strip()
 
 def clear_log():
     global LOG
