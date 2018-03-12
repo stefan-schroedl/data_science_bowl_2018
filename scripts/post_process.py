@@ -1,3 +1,5 @@
+import numpy as np
+
 from skimage.morphology import reconstruction
 from skimage import img_as_float, exposure
 from skimage.util import invert
@@ -17,7 +19,11 @@ def parametric_pipeline(img,
                 min_distance=9,
                 use_watershed=False
                 ):
-    
+
+    tmp = img.flatten()
+    if tmp.min() == tmp.max():
+        return np.zeros_like(img)
+
     circle_size = np.clip(int(circle_size), 1, 30)
     if use_watershed:
         disk_size = np.clip(int(disk_size), 0, 50)

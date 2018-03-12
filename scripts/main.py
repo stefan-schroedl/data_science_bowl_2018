@@ -33,6 +33,10 @@ from architectures import CNN
 from utils import mkdir_p, csv_list, strip_end, init_logging, get_log, set_log, clear_log, insert_log, get_latest_log, get_history_log
 from adjust_learn_rate import ReduceLROnPlateau, adjust_learning_rate
 
+import post_process
+from post_process import parametric_pipeline
+from loss import iou_metric, diagnose_errors, show_compare_gt
+
 def get_checkpoint_file(args):
     return os.path.join(args.out_dir, 'model_save_%s.pth.tar' % args.experiment)
 
@@ -107,6 +111,8 @@ parser.add('--override-model-opts', type=csv_list, default='override_model_opts,
            help='when resuming, change these options [default: %(default)s]')
 parser.add('--evaluate', '-E', dest='evaluate', action='store_true',
            help='evaluate model on validation set')
+parser.add('--calc-iou', type=int, default=0, help='calculate iou and exit')
+parser.add('--random-seed', type=int, default=2018, help='set random number generator seed [default: %(default)s]')
 parser.add('--verbose', '-V', action='store_true', help='verbose logging')
 parser.add('--force-overwrite', type=int, default=0, help='overwrite existing checkpoint, if it exists')
 parser.add('--log-file', help='write logging output to file')
@@ -169,7 +175,11 @@ def load_checkpoint(model, optimizer, args, fname='model_best.pth.tar'):
                     if v_old != v_new:
                         logging.warn(' overriding option %s, old = %s, new = %s' % (k, v_old, v_new))
                 new_args.__dict__[k] = v_new
-                
+
+        # copy new options not present in saved file
+        for k in args.__dict__:
+            if k not in old_args.__dict__:
+                new_args.__dict__[k] = args.__dict__[k]
 
     logging.info(
         "=> loaded checkpoint '{}' (iteration {})".format(
@@ -189,6 +199,16 @@ def validate(model, loader, criterion):
         cnt = cnt + 1
     l = running_loss / cnt
     return l
+
+
+def compute_iou(model, loader):
+    model.eval()
+    pred = [(model(Variable(img,requires_grad=False)).data.numpy().squeeze(), mask.numpy().squeeze()) for img, (mask,mask_seg) in tqdm(iter(loader))]
+    img_th = [(parametric_pipeline(img, circle_size=4), mask) for img, mask in pred]
+    ious = [iou_metric(i,m) for (i,m) in img_th]
+    msg = 'iou: mean = %.5f, med = %.5f' % (np.mean(ious), np. median(ious))
+    print msg
+    logging.info(msg)
 
 
 def train(
@@ -313,6 +333,7 @@ def main():
        args.out_dir = 'experiments/%s' % args.experiment 
     mkdir_p(args.out_dir)
 
+    # for later info, save the current configuration
     if args.config is not None and os.path.isfile(args.config):
         shutil.copy(args.config, args.out_dir)
 
@@ -320,6 +341,9 @@ def main():
         args.log_file = os.path.join(args.out_dir, '%s.log' % args.experiment)
 
     init_logging(args)
+
+    if args.random_seed is not None:
+        np.random.seed(args.random_seed)
     # create model
     model = CNN()
     it = 0
@@ -362,6 +386,10 @@ def main():
     train_loader = DataLoader(train_dset, batch_size=1, shuffle=True)
     valid_loader = DataLoader(valid_dset, batch_size=1, shuffle=True)
 
+    if args.calc_iou > 0:
+        compute_iou(model, train_loader)
+        return
+
     if args.evaluate:
         validate(model, valid_loader, criterion)
         return
@@ -370,7 +398,7 @@ def main():
         l = validate(model, valid_loader, criterion)
         logging.info('validation for loaded model: %s' % l)
 
-    lr_scheduler = ReduceLROnPlateau(patience=args.patience,verbose=1)
+    lr_scheduler = ReduceLROnPlateau(patience=args.patience, verbose=1)
 
     for epoch in range(args.epochs):
         it, best_loss, best_it = train(train_loader, valid_loader, model, criterion, optimizer, epoch, args.eval_every, args.print_every, args.save_every)

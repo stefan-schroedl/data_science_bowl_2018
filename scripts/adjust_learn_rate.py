@@ -134,7 +134,7 @@ class ReduceLROnPlateau(object):
                         new_lr = max(new_lr, self.min_lr)
                         #K.set_value(self.model.optimizer.lr, new_lr)
                         if self.verbose > 0:
-                            print('\nEpoch %05d: ReduceLROnPlateau reducing learning '
+                            logging.info('\nEpoch %05d: ReduceLROnPlateau reducing learning '
                                   'rate to %s.' % (epoch + 1, new_lr))
                         self.cooldown_counter = self.cooldown
                         self.wait = 0
