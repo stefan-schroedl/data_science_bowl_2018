@@ -8,6 +8,8 @@ import os
 import logging
 import socket
 import errno
+import pickle
+
 import skimage
 from skimage import img_as_float, exposure
 from skimage.morphology import label
@@ -17,6 +19,15 @@ import matplotlib.pyplot as plt
 import torch
 import torchvision
 from torchvision.transforms import ToPILImage
+
+
+def save_object(obj, filename):
+    with open(filename, 'wb') as output:  # Overwrites any existing file.
+        pickle.dump(obj, output, pickle.HIGHEST_PROTOCOL)
+
+def load_object(filename):
+    with open(filename, 'rb') as input:
+        return pickle.load(input)
 
 def exceptions_str():
         return traceback.format_exception_only(sys.exc_info()[0], sys.exc_info()[1])[0].strip()

@@ -123,7 +123,7 @@ parser.add('--eval-every', default=10, type=int,
            metavar='N', help='eval frequency [default: %(default)s]')
 parser.add('--patience', default=10, type=int,
            metavar='N', help='patience for lr scheduler [default: %(default)s]')
-parser.add('--cooldown', default=5, type=int,
+parser.add('--cooldown', default=10, type=int,
            metavar='N', help='cooldown for lr scheduler [default: %(default)s]')
 parser.add('--resume', default='', type=str, metavar='PATH',
            help='path to latest checkpoint [default: %(default)s]')
@@ -299,7 +299,7 @@ def compute_iou(model, loader):
     print msg
 
 
-def backprop_weight(labels, img, thresh=0.5):
+def backprop_weight(labels, img, thresh=0.1):
     img_th = parametric_pipeline(img, circle_size=4)
     union, intersection, area_true, area_pred = union_intersection(labels, img_th)
 
@@ -310,8 +310,11 @@ def backprop_weight(labels, img, thresh=0.5):
 
     denom = 1.0 * (tp + fp + fn)
 
+    if tp + fn == 0.0:
+        return 0.0
+
     if denom == 0.0:
-        return 0.001
+        return 1.0
 
     return 1.0 / denom
 
@@ -343,7 +346,7 @@ def train_cnn(
         model.train(True)
 
         outputs = model(img)
-        w = backprop_weight(labels.numpy(), outputs.data[0].numpy())
+        w = backprop_weight(labels.numpy().squeeze(), outputs.data[0].numpy().squeeze())
         w_cnt += 1
         w_sum += w
         if w_cnt > 5:

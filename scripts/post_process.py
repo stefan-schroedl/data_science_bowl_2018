@@ -14,7 +14,7 @@ from skimage.morphology import erosion, dilation, binary_dilation, binary_openin
 from skimage.morphology import disk
 from scipy import ndimage as ndi
 
-from utils import exceptions_str
+from utils import exceptions_str, save_object
 
 # same as v1, but using skimage instead of cv2
 def parametric_pipeline(img,
@@ -68,6 +68,7 @@ def parametric_pipeline(img,
     except:
         logging.error("Error in parametric pipeline:\n%s" % exceptions_str())
         return np.zeros_like(img)
+
 
 def parametric_pipeline_v1(img,
                 invert_thresh_pd = 10,

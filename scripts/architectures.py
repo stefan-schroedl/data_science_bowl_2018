@@ -90,6 +90,19 @@ class CNN(nn.Module):
             #nn.BatchNorm2d(16),
             nn.ReLU())
         self.layer4 = nn.Sequential(
+            nn.Conv2d(16, 16, stride=1, kernel_size=3, padding=1),
+            #nn.BatchNorm2d(16),
+            nn.ReLU())
+        self.layer5 = nn.Sequential(
+            nn.Conv2d(16, 16, stride=1, kernel_size=3, padding=1),
+            #nn.BatchNorm2d(16),
+            nn.ReLU())
+        self.layer6 = nn.Sequential(
+            nn.Conv2d(16, 16, stride=1, kernel_size=3, padding=1),
+            #nn.BatchNorm2d(16),
+            nn.ReLU())
+
+        self.layer7 = nn.Sequential(
             nn.Conv2d(16, 1, stride=1, kernel_size=1, padding=0))
 
     def forward(self, x):
@@ -103,6 +116,10 @@ class CNN(nn.Module):
         out = self.layer2(out)
         out = self.layer3(out)
         out = self.layer4(out)
+        out = self.layer5(out)
+        out = self.layer6(out)
+        out = self.layer7(out)
+       
         return out
     
     def get_color_adjust(self, x):
