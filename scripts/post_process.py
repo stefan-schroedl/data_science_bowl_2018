@@ -33,9 +33,9 @@ def parametric_pipeline(img,
     
     thresh = threshold_otsu(img)
     img_th = img > thresh
-
     if len(np.where(img_th)[0]) > invert_thresh_pd * img.size:
         img=invert(img)
+
 
     # morphological opening (size tuned on training data)
     #circle7=cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(circle_size, circle_size))

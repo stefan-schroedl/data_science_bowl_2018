@@ -6,9 +6,9 @@ import cv2
 import faiss   
 from transform import random_rotate90_transform1
 class KNN():
-    def __init__(self,n=5,patch_size=13,sample=200,gauss_blur=False,similarity=False,normalize=True):
+    def __init__(self,n=5,patch_size=13,sample=400,gauss_blur=False,similarity=False,normalize=True):
         self.n=5 # nearest patches to average
-        self.nn=40 # nearest images to use as training
+        self.nn=50 # nearest images to use as training
         self.cutoff=1e5
         self.channels=8
         self.patch_size=patch_size
