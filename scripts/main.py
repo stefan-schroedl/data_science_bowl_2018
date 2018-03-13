@@ -150,8 +150,7 @@ def save_checkpoint(fname,
          'log': get_log()}
 
     if global_state:
-        for k in ['it', 'best_loss', 'best_it', 'args']:
-            s[k] = global_state[k]
+            s['global_state'] = global_state
 
     if optimizer:
         s['optimizer_state_dict'] = optimizer.state_dict()
@@ -177,10 +176,9 @@ def load_checkpoint(fname,
     except:
         pass
 
-    if global_state:
-        global_state['it'] = checkpoint['it']
-        global_state['best_it'] = checkpoint['best_it']
-        global_state['best_loss'] = checkpoint['best_loss']
+    if global_state and 'global_state' in checkpoint:
+        for k,v in checkpoint['global_state'].iteritems():
+            global_state[k] = v
 
     if model:
         model.load_state_dict(checkpoint['model_state_dict'])
@@ -188,11 +186,11 @@ def load_checkpoint(fname,
     if optimizer:
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
-    if global_state and global_state['args']:
+    if global_state and 'args' in global_state and 'global_state' in checkpoint and 'args' in checkpoint['global_state']:
         args = global_state['args']
         override = args.override_model_opts
 
-        old_args = checkpoint['args']
+        old_args = checkpoint['global_state']['args']
         new_args = copy.deepcopy(old_args)
 
         for k in override:
@@ -210,9 +208,13 @@ def load_checkpoint(fname,
                 new_args.__dict__[k] = args.__dict__[k]
 
         global_state['args'] = new_args
+
+    it = '?'
+    if 'global_state' in checkpoint and 'it' in checkpoint['global_state']:
+        it = checkpoint['global_state']['it']
     logging.info(
         "=> loaded checkpoint '{}' (iteration {})".format(
-            fname, checkpoint['it']))
+            fname, it))
 
 def torch_to_numpy(t):
     return (t.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
@@ -299,7 +301,7 @@ def compute_iou(model, loader):
     print msg
 
 
-def backprop_weight(labels, img, thresh=0.1):
+def backprop_weight(labels, img, global_state, thresh=0.1):
     img_th = parametric_pipeline(img, circle_size=4)
     union, intersection, area_true, area_pred = union_intersection(labels, img_th)
 
@@ -308,15 +310,22 @@ def backprop_weight(labels, img, thresh=0.1):
 
     tp, fp, fn, matches_by_pred, matches_by_target = precision_at(iou, thresh)
 
+    w = 1.0
+
     denom = 1.0 * (tp + fp + fn)
 
     if tp + fn == 0.0:
-        return 0.0
+        w = 0.0
 
-    if denom == 0.0:
-        return 1.0
+    if denom > 0.0:
+        w = 1.0 / denom
 
-    return 1.0 / denom
+    # normalize with running average
+    w = w / (global_state['bp_wt_sum'] / global_state['bp_wt_cnt'])
+    global_state['bp_wt_sum'] += w
+    global_state['bp_wt_cnt'] += 1
+
+    return w
 
 
 def train_cnn(
@@ -346,14 +355,8 @@ def train_cnn(
         model.train(True)
 
         outputs = model(img)
-        w = backprop_weight(labels.numpy().squeeze(), outputs.data[0].numpy().squeeze())
-        w_cnt += 1
-        w_sum += w
-        if w_cnt > 5:
-            w = w * w_cnt / w_sum
-            #print w_sum/w_cnt
-        else:
-            w = 1.0
+        w = backprop_weight(labels.numpy().squeeze(), outputs.data[0].numpy().squeeze(), global_state)
+
         criterion._buffers['weights'] = torch.FloatTensor([w])
 
         loss = criterion(outputs, labels_seg)
@@ -473,7 +476,7 @@ def main():
     if args.random_seed is not None:
         np.random.seed(args.random_seed)
 
-    global_state = {'it':0, 'best_loss':1e20, 'best_it':0, 'lr':args.lr, 'args':args}
+    global_state = {'it':0, 'best_loss':1e20, 'best_it':0, 'lr':args.lr, 'args':args, 'bp_wt_sum':0.05, 'bp_wt_cnt': 10}
 
     # create model
 
