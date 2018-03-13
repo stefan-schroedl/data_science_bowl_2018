@@ -1,8 +1,4 @@
 #!/usr/bin/env python
-'''
-Fast inplementation of Run-Length Encoding algorithm
-Takes only 200 seconds to process 5635 mask files
-'''
 
 import sys
 import traceback
@@ -14,6 +10,7 @@ import socket
 import errno
 import skimage
 from skimage import img_as_float, exposure
+from skimage.morphology import label
 from skimage.io import imread
 from matplotlib import _cntr as cntr
 import matplotlib.pyplot as plt
@@ -53,7 +50,7 @@ def insert_log(it, k, v):
 def get_latest_log(what):
     global LOG
     last = LOG[-1]
-    if not what in last:
+    if what not in last:
         raise ValueError('no such key in log: %s' % what)
     return last[what]
 
@@ -70,7 +67,7 @@ def init_logging(opts={}):
     if hasattr(opts, 'log_file') and opts.log_file:
         # slight hack: dollar signs work if config file is read by shell, here we need to strip it
         # another slight hack: sometimes HOSTNAME is not set
-        if not 'HOSTNAME' in os.environ.keys():
+        if 'HOSTNAME' not in os.environ.keys():
             os.environ['HOSTNAME'] = socket.gethostname()
         filename = opts.log_file.replace('$','').format(**os.environ)
     verbose = False
@@ -130,6 +127,7 @@ def is_inverted(img,invert_thresh_pd=10.0):
     img_th = cv2.threshold(img_grey,0,255,cv2.THRESH_OTSU)[1]
 
     return np.sum(img_th==255)>((invert_thresh_pd/10.0)*np.sum(img_th==0))
+
 
 # RLE encoding
 

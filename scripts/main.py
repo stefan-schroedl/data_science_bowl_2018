@@ -2,62 +2,45 @@
 import sys
 import os
 import shutil
-from collections import namedtuple
-from tqdm import tqdm
-from sklearn.neighbors import KNeighborsClassifier
-from KNN import *
-#torch imports
-#from main import *
-import torch
-from torch import optim
-import torchvision
-from torch.autograd import Variable
-from torchvision.transforms import ToTensor, ToPILImage
-#cv2 imports
-import cv2
-import transform
-from transform import random_rotate90_transform2
-#the best part of the imports
-from architectures import *
-from dataset import *
-
 
 import configargparse
-import os
-import shutil
 import copy
-from tqdm import tqdm
 import timeit
 import time
 import logging
 
+from tqdm import tqdm
+
 import numpy as np
+import matplotlib.pyplot as plt
 
 import torch
 from torch import optim, nn
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from torch.autograd import Variable
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import Dataset, DataLoader
 
 import torchvision
 from torchvision.transforms import ToTensor, ToPILImage
 
-import matplotlib.pyplot as plt
-import operator
-from operator import itemgetter
+import cv2
 
+from sklearn.neighbors import KNeighborsClassifier
+
+import utils
+from utils import mkdir_p, csv_list, strip_end, init_logging, get_log, set_log, clear_log, insert_log, get_latest_log, get_history_log
+from adjust_learn_rate import get_learning_rate
+
+from KNN import *
 
 import transform
 from transform import random_rotate90_transform2
 import dataset
 from dataset import NucleusDataset
+
 import architectures
 from architectures import CNN
-from utils import mkdir_p, csv_list, strip_end, init_logging, get_log, set_log, clear_log, insert_log, get_latest_log, get_history_log
-from adjust_learn_rate import get_learning_rate
-
-
 
 import post_process
 from post_process import parametric_pipeline
@@ -285,7 +268,8 @@ def train_knn(
             model.fit()
             l = validate_knn(model, valid_loader, criterion)
             img,mask,boundary,blend=model.predict(img)
-            stats.append((it, running_loss / cnt, l))
+            insert_log(global_state['it'], 'train_loss', running_loss / cnt)
+            insert_log(global_state['it'], 'valid_loss', l)
             running_loss = 0.0
 
             if cnt > 0 and global_state['it'] % print_every == 0:
