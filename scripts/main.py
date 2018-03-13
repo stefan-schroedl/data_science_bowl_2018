@@ -108,6 +108,8 @@ parser.add('--momentum', '-m', default=0.9, type=float, metavar='M',
            help='momentum [default: %(default)s]')
 parser.add('--weight-decay', default=1e-4, type=float,
            metavar='W', help='weight decay [default: %(default)s]')
+parser.add('--use-instance-weights', default=0, type=int,
+           metavar='N', help='apply instance weights during training [default: %(default)s]')
 parser.add('--criterion', '-C', default='mse', choices=['mse','bce','jaccard','dice'],
            metavar='C', help='loss function [default: %(default)s]')
 parser.add('--optim', '-O', default='sgd', choices=['sgd','adam'],
@@ -355,9 +357,10 @@ def train_cnn(
         model.train(True)
 
         outputs = model(img)
-        w = backprop_weight(labels.numpy().squeeze(), outputs.data[0].numpy().squeeze(), global_state)
 
-        criterion._buffers['weights'] = torch.FloatTensor([w])
+        if global_state['args'].use_instance_weights > 0:
+            w = backprop_weight(labels.numpy().squeeze(), outputs.data[0].numpy().squeeze(), global_state)
+            criterion._buffers['weights'] = torch.FloatTensor([w])
 
         loss = criterion(outputs, labels_seg)
         optimizer.zero_grad()
@@ -567,8 +570,6 @@ def main():
     if args.resume:
         l = validate(model, valid_loader, criterion)
         logging.info('validation for loaded model: %s' % l)
-
-
 
     for epoch in range(args.epochs):
         it, best_loss, best_it = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
