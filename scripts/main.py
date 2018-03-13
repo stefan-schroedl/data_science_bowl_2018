@@ -216,17 +216,20 @@ def load_checkpoint(model, optimizer, args, fname='model_best.pth.tar'):
             fname, checkpoint['it']))
     return it, new_args
 
-def torch_to_numpy(t):
-    return (t.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
+def torch_to_numpy(t,scale=255):
+    return (t.numpy()[0].transpose(1,2,0)*scale).astype(np.uint8)
 
 valn=0
+iou_pipe=[]
+iou_l=[]
+iou_l2=[]
 def validate_knn(model, loader, criterion):
     running_loss = 0.0
     cnt = 0
     global valn
     valn+=1
     for i, (img, (labels, labels_seg)) in enumerate(loader):
-        p_img,p_seg,p_boundary,p_blend,p_super_boundary,p_super_boundary_2=model.predict(img)
+        p_img,p_seg,p_boundary,p_blend,p_super_boundary,p_super_boundary_2,l,l2=model.predict(img)
         torch_p_seg = torch.from_numpy(p_seg[None,:,:].astype(np.float)/255).float()
         #torch_p_boundary = torch.from_numpy(p_boundary[None,:,:].astype(np.float)/255).float()
         #torch_p_blend = torch.from_numpy(p_blend[None,:,:].astype(np.float)/255).float()
@@ -241,8 +244,20 @@ def validate_knn(model, loader, criterion):
         whole[:,p_img.shape[1]:p_img.shape[1]+5,:2]=0
         #cv2.imshow('wtf',whole)
         cv2.imwrite('%d_%d.png' % (valn,i),whole)
-        print valn,i
         #cv2.imshow('pbound',p_boundary)
+
+        #get iou using parametric
+        _,p_seg_thresh = cv2.threshold(p_seg,20,255,cv2.THRESH_BINARY)
+        p_seg_thresh/=255
+        img_th = parametric_pipeline(p_seg_thresh.astype(np.uint8), circle_size=4)
+        iou_pipe.append(iou_metric(img_th,torch_to_numpy(labels,scale=1)))
+        #cv2.imwrite('%d_%d_p_seg_thresh.png' % (valn,i),p_seg_thresh*255)
+        #cv2.imwrite('%d_%d_img_th.png' % (valn,i),(img_th*255).astype(np.uint8))
+
+        iou_l.append(iou_metric(l,torch_to_numpy(labels,scale=1)))
+        iou_l2.append(iou_metric(l2,torch_to_numpy(labels,scale=1)))
+        print "IOU",iou_pipe[-1],iou_l[-1],iou_l2[-1],sum(iou_pipe)/len(iou_pipe),sum(iou_l)/len(iou_l),sum(iou_l2)/len(iou_l2)
+
         #cv2.imshow('pblend',p_blend)
         #cv2.waitKey(10)
         loss = criterion(Variable(torch_p_seg), Variable(labels_seg.float()))
