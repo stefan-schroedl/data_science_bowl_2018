@@ -1,4 +1,5 @@
 #!//usr/bin/env python
+
 import sys
 import os
 import shutil
@@ -138,24 +139,25 @@ parser.add('--log-file', help='write logging output to file')
 
 def save_checkpoint(
         model,
-        optimizer,
-        args,
-        global_state,
+        optimizer=None,
+        global_state=None,
         is_best = False,
         fname='model_save.pth.tar'):
 
     m_state_dict = model.state_dict()
     o_state_dict = optimizer.state_dict()
 
-    torch.save({
-        'args':args,
-        'it': global_state['it'],
-        'model_state_dict': m_state_dict,
-        'optimizer_state_dict': o_state_dict,
-        'best_loss': global_state['best_loss'],
-        'best_it': global_state['best_it'],
-        'log': get_log()},
-        fname)
+    s = {'model_state_dict': model.state_dict(),
+         'log': get_log()}
+
+    if global_state:
+        for k in ['it', 'best_loss', 'best_it', 'args']:
+            s[k] = global_state[k]
+
+    if optimizer:
+        s['optimizer_state_dict'] = optimizer.state_dict()
+    torch.save(s, fname)
+
     if is_best:
         logging.info('new best: it = %d, train = %.5f, valid = %.5f' % (get_latest_log('it'), get_latest_log('train_loss'), get_latest_log('valid_loss')))
         pref = strip_end(fname, '.pth.tar')
@@ -163,19 +165,23 @@ def save_checkpoint(
 
 
 def load_checkpoint(model,
-                    optimizer,
-                    global_state,
+                    optimizer=None,
+                    global_state=None,
                     fname='model_best.pth.tar'):
 
     if not os.path.isfile(fname):
         raise ValueError('checkpoint not found: %s', fname)
 
     checkpoint = torch.load(fname)
-    set_log(checkpoint['log'])
-    global_state['it'] = checkpoint['it']
+    try:
+        set_log(checkpoint['log'])
+    except:
+        pass
 
-    global_state['best_it'] = checkpoint['best_it']
-    global_state['best_loss'] = checkpoint['best_loss']
+    if global_state:
+        global_state['it'] = checkpoint['it']
+        global_state['best_it'] = checkpoint['best_it']
+        global_state['best_loss'] = checkpoint['best_loss']
 
     if model:
         model.load_state_dict(checkpoint['model_state_dict'])
@@ -183,7 +189,7 @@ def load_checkpoint(model,
     if optimizer:
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
-    if global_state['args']:
+    if global_state and global_state['args']:
         args = global_state['args']
         override = args.override_model_opts
 
@@ -204,7 +210,7 @@ def load_checkpoint(model,
             if k not in old_args.__dict__:
                 new_args.__dict__[k] = args.__dict__[k]
 
-    global_state['args'] = new_args
+        global_state['args'] = new_args
     logging.info(
         "=> loaded checkpoint '{}' (iteration {})".format(
             fname, checkpoint['it']))
@@ -283,6 +289,7 @@ def train_knn(
                     is_best = True
     return global_state['it'], global_state['best_loss'], global_state['best_it']
 
+
 def compute_iou(model, loader):
     model.eval()
     pred = [(model(Variable(img,requires_grad=False)).data.numpy().squeeze(), mask.numpy().squeeze()) for img, (mask,mask_seg) in tqdm(iter(loader))]
@@ -331,6 +338,7 @@ def train_cnn(
     # global it, best_it, best_loss, args, lr
 
     for global_state['it'], (img, (labels, labels_seg)) in tqdm(enumerate(train_loader, global_state['it'] + 1)):
+
         img, labels_seg = Variable(img), Variable(labels_seg)
 
         model.train(True)
@@ -354,7 +362,6 @@ def train_cnn(
 
         running_loss += loss.data[0]
         if cnt > 0 and global_state['it'] % eval_every == 0:
-
             l = validate(model, valid_loader, criterion)
             train_loss = running_loss / cnt
             insert_log(global_state['it'], 'train_loss', train_loss)
@@ -372,13 +379,12 @@ def train_cnn(
                     global_state['best_loss'] = l
                     global_state['best_it'] = global_state['it']
                     is_best = True
-                    save_checkpoint(
-                        model,
-                        optimizer,
-                        global_state['args'],
-                        global_state,
-                        is_best,
-                        get_checkpoint_file(global_state['args']))
+                save_checkpoint(
+                    model,
+                    optimizer,
+                    global_state,
+                    is_best,
+                    get_checkpoint_file(global_state['args']))
             cnt = 0
 
             scheduler.step(train_loss)
@@ -437,7 +443,7 @@ def train_transform(img, mask, mask_seg):
         mask = np.expand_dims(mask, 2)
     if len(mask_seg.shape) == 2:
         mask_seg = np.expand_dims(mask_seg, 2)
-    img, mask, mask_seg = random_rotate90_transform2(0.5, img, mask, mask_seg)
+    img, mask, mask_seg = random_rotate90_transform2(img, mask, mask_seg)
     img = ToTensor()(img)
     mask = torch.from_numpy(np.transpose(mask, (2, 0, 1))).float()
     mask_seg = torch.from_numpy(np.transpose(mask_seg, (2, 0, 1))).float()

@@ -126,7 +126,7 @@ def random_vertical_flip_transform2(image, mask, u=0.5):
     return image, mask
 
 
-def random_rotate90_transform2(u, *images):
+def random_rotate90_transform2(*images):
     k = np.random.randint(4)
     return [random_rotate90_transform1(img, k) for img in images]
 

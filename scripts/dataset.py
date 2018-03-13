@@ -14,7 +14,7 @@ from glob import glob
 
 from torchvision import transforms, utils
 from torch.autograd import Variable
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 from torch.utils.data.sampler import SubsetRandomSampler
 
 from PIL import Image

@@ -311,6 +311,4 @@ def plot_img_and_hist(image, axes=None, bins=256):
     return ax_img, ax_hist, ax_cdf
 
 if __name__ == '__main__':
-    # check_encoding()
-    print 'hello'
-
+    pass
