@@ -197,6 +197,7 @@ def read_img_join_masks(img_id, root='../../input/stage1_train/'):
 
 # https://stackoverflow.com/questions/18304722/python-find-contour-lines-from-matplotlib-pyplot-contour
 # add contour to plot, without directly plotting!
+# assuming input is (integer) label mask
 def add_contour(z, ax, color='black'):
 
     z = z.astype(int)
@@ -204,8 +205,8 @@ def add_contour(z, ax, color='black'):
     c = cntr.Cntr(x, y, z)
 
     # trace a contour at z == 0.5
-    for at in range(1, np.amax(z)+1):
-        res = c.trace(at)
+    for at in range(np.amin(z), np.amax(z)):
+        res = c.trace(at + 0.5)
 
         # result is a list of arrays of vertices and path codes
         # (see docs for matplotlib.path.Path)
@@ -214,12 +215,11 @@ def add_contour(z, ax, color='black'):
 
         for seg in segments:
             # for some reason, the coordinates are flipped???
-            p = plt.Polygon([[x[1],x[0]] for x in seg], fill=False, color=color)
+            p = plt.Polygon([[x[1],x[0]] for x in seg], fill=False, color=color, linewidth=2.0)
             ax.add_artist(p)
 
 # display one or several images
-def show_images(img):
-    max_col = 3
+def show_images(img, max_col=3):
     if not isinstance(img, (tuple, list)):
         img = [img]
 
@@ -262,11 +262,11 @@ def show_images(img):
             ax[c,r].axis('off')
     plt.show()
 
-def show_with_contour(img, mask):
+def show_with_contour(img, mask, color='black'):
     fig, ax = plt.subplots(1, 1, figsize=(16, 16))
     ax.grid(None)
     ax.imshow(img)
-    add_contour(mask, ax)
+    add_contour(mask, ax, color)
     plt.tight_layout()
     plt.xticks([])
     plt.yticks([])

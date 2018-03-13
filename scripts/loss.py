@@ -7,6 +7,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 import matplotlib
 import matplotlib.pyplot as plt
+from skimage.color import rgb2grey
 #from post_process import parametric_pipeline
 
 from utils import add_contour
@@ -166,18 +167,18 @@ def diagnose_errors(labels, y_pred, threshold=.5, print_message=True):
     return p, p_loc, mean_prec, mean_rec, missed_rate, extra_rate, oseg, useg
 
 
-def show_compare_gt(img, masks, thresh=0.5, **opts):
-    pred_masks = parametric_pipeline(img, **opts)
+def show_compare_gt(img, pred, mask, thresh=0.5, **opts):
+    #pred_masks = parametric_pipeline(img, **opts)
     fig, ax = plt.subplots(1, 1, figsize=(16, 16))
     ax.grid(None)
-    ax.imshow(img)
-    add_contour(masks, ax, 'green')
-    add_contour(pred_masks, ax, 'red')
+    ax.imshow(rgb2grey(img), alpha=0.5),
+    add_contour(mask, ax, 'green')
+    add_contour(pred, ax, 'red')
     plt.tight_layout()
     plt.xticks([])
     plt.yticks([])
     plt.show()
-    return diagnose_errors(masks, pred_masks, thresh, print_message=True)
+    return diagnose_errors(mask, pred, thresh, print_message=True)
 
     
 #####

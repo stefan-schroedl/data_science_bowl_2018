@@ -137,12 +137,11 @@ parser.add('--verbose', '-V', action='store_true', help='verbose logging')
 parser.add('--force-overwrite', type=int, default=0, help='overwrite existing checkpoint, if it exists')
 parser.add('--log-file', help='write logging output to file')
 
-def save_checkpoint(
-        model,
-        optimizer=None,
-        global_state=None,
-        is_best = False,
-        fname='model_save.pth.tar'):
+def save_checkpoint(fname,
+                    model,
+                    optimizer=None,
+                    global_state=None,
+                    is_best = False):
 
     m_state_dict = model.state_dict()
     o_state_dict = optimizer.state_dict()
@@ -164,10 +163,10 @@ def save_checkpoint(
         shutil.copyfile(fname, '%s_best.pth.tar' % pref)
 
 
-def load_checkpoint(model,
+def load_checkpoint(fname,
+                    model,
                     optimizer=None,
-                    global_state=None,
-                    fname='model_best.pth.tar'):
+                    global_state=None):
 
     if not os.path.isfile(fname):
         raise ValueError('checkpoint not found: %s', fname)
@@ -380,11 +379,11 @@ def train_cnn(
                     global_state['best_it'] = global_state['it']
                     is_best = True
                 save_checkpoint(
+                    get_checkpoint_file(global_state['args']),
                     model,
                     optimizer,
                     global_state,
-                    is_best,
-                    get_checkpoint_file(global_state['args']))
+                    is_best)
             cnt = 0
 
             scheduler.step(train_loss)
@@ -517,7 +516,7 @@ def main():
 
     # optionally resume from a checkpoint
     if args.resume:
-        load_checkpoint(model, optimizer, global_state, args.resume)
+        load_checkpoint(args.resume, model, optimizer, global_state)
         # make sure args here is consistent with possibly updated global_state['args']!
         args = global_state['args']
         args.force_overwrite = 1
