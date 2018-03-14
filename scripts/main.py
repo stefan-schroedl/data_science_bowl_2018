@@ -55,10 +55,15 @@ def get_checkpoint_file(args):
 def save_plot(fname):
     train_loss, train_loss_it = get_history_log('train_loss')
     valid_loss, valid_loss_it = get_history_log('valid_loss')
+    grad, grad_it = get_history_log('grad')
 
-    fig, ax = plt.subplots( nrows=1, ncols=1 )
-    ax.plot(train_loss_it, train_loss, 'g')
-    ax.plot(valid_loss_it, valid_loss, 'r')
+    fig, ax = plt.subplots( nrows=2, ncols=1)
+    ax[0].plot(train_loss_it, train_loss, 'g', label='train')
+    ax[0].plot(valid_loss_it, valid_loss, 'r', label='test')
+    ax[1].plot(grad_it, grad, label='grad')
+    ax[0].legend()
+    ax[1].legend()
+    plt.tight_layout()
     fig.savefig(fname)
     plt.close(fig)
 
@@ -100,6 +105,8 @@ parser.add('--start-epoch', default=0, type=int, metavar='N',
            help='manual epoch number (useful on restarts)')
 parser.add('-b', '--batch-size', default=256, type=int,
            metavar='N', help='mini-batch size (default: 256)')
+parser.add('--grad-accum', default=1, type=int,
+           metavar='N', help='number of batches between gradient descent [default: %(default)s]')
 parser.add('--lr', '--learning-rate', default=0.001, type=float,
            metavar='LR', help='initial learning rate [default: %(default)s]')
 parser.add('--min_lr', default=0.00001, type=float,
@@ -110,6 +117,8 @@ parser.add('--weight-decay', default=1e-4, type=float,
            metavar='W', help='weight decay [default: %(default)s]')
 parser.add('--use-instance-weights', default=0, type=int,
            metavar='N', help='apply instance weights during training [default: %(default)s]')
+parser.add('--clip-gradient', default=0.25, type=float,
+           metavar='C', help='clip excessive gradients during training [default: %(default)s]')
 parser.add('--criterion', '-C', default='mse', choices=['mse','bce','jaccard','dice'],
            metavar='C', help='loss function [default: %(default)s]')
 parser.add('--optim', '-O', default='sgd', choices=['sgd','adam'],
@@ -344,9 +353,8 @@ def train_cnn(
         global_state):
 
     running_loss = 0.0
-    cnt = 0
-    w_sum = 0.0
-    w_cnt = 0
+    running_grad = 0.0
+    valid_cnt = 0
 
     # global it, best_it, best_loss, args, lr
 
@@ -363,20 +371,34 @@ def train_cnn(
             criterion._buffers['weights'] = torch.FloatTensor([w])
 
         loss = criterion(outputs, labels_seg)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        cnt = cnt + 1
 
+        # gradient accumulation
+        accum_total = global_state['args'].grad_accum
+        accum_step = global_state['grad_accum_it']
+        if accum_step == 0:
+            optimizer.zero_grad()
+        loss.backward()
+        grad = torch.nn.utils.clip_grad_norm(model.parameters(), global_state['args'].clip_gradient)
+        if accum_step == accum_total - 1:
+            optimizer.step()
+        accum_step = (accum_step + 1) % accum_total
+        global_state['grad_accum_it'] = accum_step
+
+        valid_cnt += 1
         running_loss += loss.data[0]
-        if cnt > 0 and global_state['it'] % eval_every == 0:
+        running_grad += grad
+
+        if valid_cnt > 0 and global_state['it'] % eval_every == 0:
             l = validate(model, valid_loader, criterion)
-            train_loss = running_loss / cnt
+            train_loss = running_loss / valid_cnt
+            train_grad = running_grad / valid_cnt
             insert_log(global_state['it'], 'train_loss', train_loss)
+            insert_log(global_state['it'], 'grad', train_grad)
             insert_log(global_state['it'], 'valid_loss', l)
             running_loss = 0.0
+            running_grad = 0.0
 
-            if cnt > 0 and global_state['it'] % print_every == 0:
+            if valid_cnt > 0 and global_state['it'] % print_every == 0:
                 logging.info('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f' %
                       (epoch, global_state['it'], train_loss, l))
                 save_plot(os.path.join(global_state['args'].out_dir, 'progress.png'))
@@ -393,7 +415,7 @@ def train_cnn(
                     optimizer,
                     global_state,
                     is_best)
-            cnt = 0
+            valid_cnt = 0
 
             scheduler.step(train_loss)
 
@@ -479,7 +501,14 @@ def main():
     if args.random_seed is not None:
         np.random.seed(args.random_seed)
 
-    global_state = {'it':0, 'best_loss':1e20, 'best_it':0, 'lr':args.lr, 'args':args, 'bp_wt_sum':0.05, 'bp_wt_cnt': 10}
+    global_state = {'it':0,
+                    'best_loss':1e20,
+                    'best_it':0,
+                    'lr':args.lr,
+                    'args':args,
+                    'grad_accum_it':0,
+                    'bp_wt_sum':0.05,
+                    'bp_wt_cnt': 10,}
 
     # create model
 
