@@ -227,13 +227,18 @@ iou_pipe=[]
 iou_l=[]
 iou_l2=[]
 iou_el=[]
+iou_clus=[]
 def validate_knn(model, loader, criterion):
     running_loss = 0.0
     cnt = 0
     global valn
     valn+=1
     for i, (img, (labels, labels_seg)) in enumerate(loader):
-        p_img,p_seg,p_boundary,p_blend,p_super_boundary,p_super_boundary_2,l,l2,el=model.predict(img)
+        #if i!=0:
+        #    continue
+        #if i>0:
+        #    sys.exit(1)
+        p_img,p_seg,p_boundary,p_blend,p_super_boundary,p_super_boundary_2,l,l2,el,clus=model.predict(img)
         torch_p_seg = torch.from_numpy(p_seg[None,:,:].astype(np.float)/255).float()
         #torch_p_boundary = torch.from_numpy(p_boundary[None,:,:].astype(np.float)/255).float()
         #torch_p_blend = torch.from_numpy(p_blend[None,:,:].astype(np.float)/255).float()
@@ -265,7 +270,12 @@ def validate_knn(model, loader, criterion):
         iou_l.append(iou_metric(l,torch_to_numpy(labels,scale=1)))
         iou_el.append(iou_metric(el,torch_to_numpy(labels,scale=1)))
         iou_l2.append(iou_metric(l2,torch_to_numpy(labels,scale=1)))
-        print "IOU",iou_pipe[-1],iou_l[-1],iou_l2[-1],iou_el[-1],sum(iou_pipe)/len(iou_pipe),sum(iou_l)/len(iou_l),sum(iou_l2)/len(iou_l2),sum(iou_el)/len(iou_el)
+        iou_clus.append(iou_metric(clus,torch_to_numpy(labels,scale=1)))
+        s="\t".join(map(lambda x : str(x) , ["IOU",iou_pipe[-1],iou_l[-1],iou_l2[-1],iou_el[-1],iou_clus[-1],sum(iou_pipe)/len(iou_pipe),sum(iou_l)/len(iou_l),sum(iou_l2)/len(iou_l2),sum(iou_el)/len(iou_el),sum(iou_clus)/len(iou_clus)]))
+        print s
+        f=open('%d_%d.txt' % (valn,i),'w')
+        f.write(s+'\n')
+        f.close()
 
         #cv2.imshow('pblend',p_blend)
         #cv2.waitKey(10)
@@ -312,13 +322,13 @@ def train_knn(
             model.fit()
             l = validate_knn(model, valid_loader, criterion)
             #img,mask,boundary,blend=model.predict(img)
-            stats.append((cfg[']it'], running_loss / cnt, l))
+            stats.append((cfg['it'], running_loss / cnt, l))
             running_loss = 0.0
 
             if cnt > 0 and cfg['it'] % print_every == 0:
                 print('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f' %
                       (epoch, cfg['it'], stats[-1][1], stats[-1][2]))
-            if it % save_every == 0:
+            if cfg['it'] % save_every == 0:
                 is_best = False
                 if cfg['best_loss'] > l:
                     cfg['best_loss'] = l
