@@ -49,7 +49,9 @@ import loss
 from loss import iou_metric, diagnose_errors, show_compare_gt, union_intersection, precision_at
 
 
-def get_checkpoint_file(args):
+def get_checkpoint_file(args, it=0):
+    if it > 0:
+        return os.path.join(args.out_dir, 'model_save_%s.%d.pth.tar' % (args.experiment, it))
     return os.path.join(args.out_dir, 'model_save_%s.pth.tar' % args.experiment)
 
 def save_plot(fname):
@@ -57,11 +59,13 @@ def save_plot(fname):
     valid_loss, valid_loss_it = get_history_log('valid_loss')
     grad, grad_it = get_history_log('grad')
 
-    fig, ax = plt.subplots( nrows=2, ncols=1)
+    fig, ax = plt.subplots(2, 1)
     ax[0].plot(train_loss_it, train_loss, 'g', label='train')
     ax[0].plot(valid_loss_it, valid_loss, 'r', label='test')
     ax[1].plot(grad_it, grad, label='grad')
+    ax[0].grid(True, 'both')
     ax[0].legend()
+    ax[1].grid(True, 'both')
     ax[1].legend()
     plt.tight_layout()
     fig.savefig(fname)
@@ -424,7 +428,6 @@ def train_cnn(
                     global_state,
                     is_best)
 
-
             scheduler.step(train_loss)
 
             #lr_new = lr_scheduler.on_epoch_end(it, lr, train_loss)
@@ -536,7 +539,7 @@ def main():
 
     logging.info(model)
     logging.info('number of parameters: %d' % sum([param.nelement() for param in model.parameters()]))
-    
+
     # set up optimizer
     if args.optim == 'adam':
         optimizer = optim.Adam(model.parameters(), args.lr,
@@ -615,6 +618,12 @@ def main():
 
     for epoch in range(args.epochs):
         it, best_loss, best_it = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
+        save_checkpoint(
+            get_checkpoint_file(global_state['args'], global_state['it']),
+            model,
+            optimizer,
+            global_state)
+
         logging.info('final best: it = %d, valid = %.5f' % (best_it, best_loss))
 
 

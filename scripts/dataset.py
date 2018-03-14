@@ -134,7 +134,7 @@ class NucleusDataset(Dataset):
 
         self.data_df = data_df
 
-        
+
     def __len__(self):
         return self.data_df.shape[0]
 
