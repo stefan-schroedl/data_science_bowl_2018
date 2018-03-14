@@ -355,6 +355,7 @@ def train_cnn(
     running_loss = 0.0
     running_grad = 0.0
     valid_cnt = 0
+    grad_cnt = 0
 
     # global it, best_it, best_loss, args, lr
 
@@ -378,27 +379,34 @@ def train_cnn(
         if accum_step == 0:
             optimizer.zero_grad()
         loss.backward()
-        grad = torch.nn.utils.clip_grad_norm(model.parameters(), global_state['args'].clip_gradient)
+        valid_cnt += 1
+        running_loss += loss.data[0]
+
         if accum_step == accum_total - 1:
+            if global_state['args'].clip_gradient > 0:
+                grad = torch.nn.utils.clip_grad_norm(model.parameters(), global_state['args'].clip_gradient)
+                running_grad += grad
+                grad_cnt += 1
             optimizer.step()
         accum_step = (accum_step + 1) % accum_total
         global_state['grad_accum_it'] = accum_step
 
-        valid_cnt += 1
-        running_loss += loss.data[0]
-        running_grad += grad
 
         if valid_cnt > 0 and global_state['it'] % eval_every == 0:
             l = validate(model, valid_loader, criterion)
             train_loss = running_loss / valid_cnt
-            train_grad = running_grad / valid_cnt
             insert_log(global_state['it'], 'train_loss', train_loss)
-            insert_log(global_state['it'], 'grad', train_grad)
             insert_log(global_state['it'], 'valid_loss', l)
             running_loss = 0.0
-            running_grad = 0.0
+            valid_cnt = 0
 
-            if valid_cnt > 0 and global_state['it'] % print_every == 0:
+            if grad_cnt > 0:
+                train_grad = running_grad / grad_cnt
+                insert_log(global_state['it'], 'grad', running_grad / grad_cnt)
+                running_grad = 0.0
+                grad_cnt = 0
+
+            if global_state['it'] % print_every == 0:
                 logging.info('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f' %
                       (epoch, global_state['it'], train_loss, l))
                 save_plot(os.path.join(global_state['args'].out_dir, 'progress.png'))
@@ -415,7 +423,7 @@ def train_cnn(
                     optimizer,
                     global_state,
                     is_best)
-            valid_cnt = 0
+
 
             scheduler.step(train_loss)
 
