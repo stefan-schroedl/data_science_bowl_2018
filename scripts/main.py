@@ -543,11 +543,16 @@ def main():
     scheduler = ReduceLROnPlateau(optimizer, patience=args.patience, cooldown=args.cooldown, min_lr=args.min_lr, verbose=1)
 
 
+    if args.use_instance_weights > 0 and args.criterion != 'bce':
+        raise ValueError('instance weights currently only supported for bce criterion')
     # define loss function (criterion)
     if args.criterion == 'mse':
         criterion = nn.MSELoss()
     elif args.criterion == 'bce':
-        criterion = nn.BCEWithLogitsLoss(torch.ones((1)))
+        if args.use_instance_weights > 0:
+            criterion = nn.BCEWithLogitsLoss(torch.ones((1)))
+        else:
+            criterion = nn.BCEWithLogitsLoss()
     elif args.criterion == 'dice':
         criterion = loss.DiceLoss()
     elif args.criterion == 'jaccard':
@@ -567,9 +572,6 @@ def main():
         if os.path.isfile(ckpt_file) and args.force_overwrite == 0:
             raise ValueError('checkpoint already exists, exiting: %s' % ckpt_file)
         clear_log()
-
-    # define loss function (criterion)
-    criterion = nn.MSELoss()
 
     # Data loading
     logging.info('loading data')
