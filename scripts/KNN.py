@@ -11,7 +11,7 @@ class KNN():
         self.nn=hist_n # nearest images to use as training
         self.super_boundary_threshold=super_boundary_threshold
         self.cutoff=1e5
-        self.boundary_cutoff=10 #50
+        self.boundary_cutoff=1 #50
         self.channels=8
         self.boundary_blur=9 #9
         self.patch_size=patch_size
@@ -178,99 +178,120 @@ class KNN():
         super_boundary_2_model = faiss.IndexFlatL2(self.patches_super_boundary_2_numpy.shape[1])
         super_boundary_2_model.add(self.patches_super_boundary_2_numpy.astype(np.float32))
 
-        return model,super_boundary_model
+        return model,super_boundary_model,super_boundary_2_model
 
 
-    def enhance(self,super_boundary_orig,super_boundary_2,super_boundary_model):
-        super_boundary=np.maximum(super_boundary_orig,super_boundary_2)
-        #super_boundary=((super_boundary.astype(np.float32)/super_boundary.max())*255).astype(np.uint8)
-        #_,super_boundary = cv2.threshold(super_boundary,50,255,cv2.THRESH_BINARY)
-        reconstructed=super_boundary.copy()
-        height,width = super_boundary.shape
-	gkernel=cv2.getGaussianKernel(ksize=self.boundary_patch_size,sigma=1)
-	gkernel=(gkernel*gkernel.T).reshape(-1)
-        for xx in range(5):
-            super_boundary_patches = extract_patches_2d(reconstructed, (self.boundary_patch_size,self.boundary_patch_size)).astype(np.float64)
-            super_boundary_patches = super_boundary_patches.reshape(super_boundary_patches.shape[0], -1)
+    def reconstruct(self,img,lib_patches,patch_size,model):
+            height,width = img.shape
+            patches = extract_patches_2d(img, (patch_size,patch_size)).astype(np.float64)
+            patches = patches.reshape(patches.shape[0], -1)
 
-            nearest_wds=super_boundary_model.search(super_boundary_patches.astype(np.float32), self.n)
+            nearest_wds=model.search(patches.astype(np.float32), self.n)
             knn_patches=np.array([])
-            for x in xrange(super_boundary_patches.shape[0]):
+            for x in xrange(patches.shape[0]):
                 idxs=nearest_wds[1][x]
                 #idxs=idxs[idxs>=0]
                 assert(idxs.min()>=0)
                 #use averaging
-                new_patch=self.patches_super_boundary_numpy[idxs].mean(axis=0)
+                new_patch=lib_patches[idxs].mean(axis=0)
 		#new_patch=np.multiply(new_patch,gkernel)
                 if knn_patches.ndim==1:
-                    knn_patches=np.zeros((super_boundary_patches.shape[0],new_patch.shape[0]))
+                    knn_patches=np.zeros((patches.shape[0],new_patch.shape[0]))
                 knn_patches[x]=new_patch
             knn_patches = knn_patches.reshape(knn_patches.shape[0], *(self.boundary_patch_size,self.boundary_patch_size))
             #add in some original :) 
             r= reconstruct_from_patches_2d( knn_patches, (height, width)).astype(np.uint8)
+            return r
+
+    def enhance(self,super_boundary_orig,super_boundary_2,super_boundary_model,super_boundary_2_model):
+        super_boundary=np.maximum(super_boundary_orig,super_boundary_2)
+        #super_boundary=((super_boundary.astype(np.float32)/super_boundary.max())*255).astype(np.uint8)
+        #_,super_boundary = cv2.threshold(super_boundary,50,255,cv2.THRESH_BINARY)
+        reconstructed=super_boundary.copy()
+	gkernel=cv2.getGaussianKernel(ksize=self.boundary_patch_size,sigma=1)
+	gkernel=(gkernel*gkernel.T).reshape(-1)
+        for xx in range(5):
+            r=self.reconstruct(reconstructed,self.patches_super_boundary_numpy,self.boundary_patch_size,super_boundary_model)
+            #take out border artifacts
             r[:2,:]=0
             r[-2:,:]=0
             r[:,:2]=0
             r[:,-2:]=0
             reconstructed = np.maximum(r , super_boundary_orig)
+        for xx in range(0):
+            r=self.reconstruct(reconstructed,self.patches_super_boundary_2_numpy,self.boundary_patch_size,super_boundary_2_model)
+            #take out border artifacts
+            r[:2,:]=0
+            r[-2:,:]=0
+            r[:,:2]=0
+            r[:,-2:]=0
+            reconstructed = r#np.maximum(r , super_boundary_orig)
         #print reconstructed.shape,"WTF"
-        cv2.imshow('reconstructed / orig + 2 / orig',np.concatenate((reconstructed[:,:,None],super_boundary[:,:,None],super_boundary_orig[:,:,None]),axis=1).astype(np.uint8))
-        cv2.waitKey(1000)
+        #cv2.imshow('reconstructed / orig + 2 / orig',np.concatenate((reconstructed[:,:,None],super_boundary[:,:,None],super_boundary_orig[:,:,None]),axis=1).astype(np.uint8))
+        #cv2.waitKey(10000)
         return reconstructed
 
 
 
-    def label(self,img): 
+    def label(self,img,seg):
         img[0,:]=255
         img[-1,:]=255
         img[:,0]=255
         img[:,-1]=255
+        img3=np.zeros((img.shape[0],img.shape[1],3))
         im2, contours, hierarchy = cv2.findContours(img, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         l = img[:,:]*0
-        stack=[0]
-        tree={}
         roots=set([])
-        children={}
+        tree={}
         for x in xrange(len(contours)):
             nxt,prv,child,parent = hierarchy[0][x]
-            if x not in children:
-                children[x]=set([])
             if parent>=0:
-                if parent not in children:
-                    children[parent]=set([])
-                children[parent].add(x)
+                if parent not in tree:
+                    tree[parent]=set([])
+                tree[parent].add(x)
             else:
                 roots.add(x)
-        idx=1 
+        idx=2 
+        stack=list(roots)
         while len(stack)>0:
             cur=stack[-1]
+            stack.pop()
             if cur not in tree:
                 tree[cur]=set([])
             a=float(cv2.contourArea(contours[cur]))/(img.shape[0]*img.shape[1])
-
+            color = np.random.randint(0,255,(3)).tolist() 
+            cv2.drawContours(img3,[contours[cur]],0,color,2)
             nxt,prv,child,parent = hierarchy[0][cur]
-            if child==-1 and a<0.3: #True: # and len(children[cur])<=2:
+            if True:# child==-1 and a<0.3: #True: # and len(children[cur])<=2:
                 cv2.fillPoly(l, [contours[cur]], int(idx))
                 idx+=1
-            if parent>=0:
-                if parent not in tree:
-                    print "WTF TREE"
-                    sys.exit(1)
-                tree[parent].add(cur)
+            #add all the kids to the stack
+            if cur in tree:
+                stack+=tree[cur]
 
-            if child>=0 and child not in tree:
-                stack.append(child)
-                continue
-
-            stack.pop()
-
-            if nxt>=0 and nxt not in tree:
-                stack.append(nxt)
-                continue
-        #cv2.imshow('img/l/l*255/contours',np.concatenate((img,l,l*255,cv2.drawContours(img*0, contours, -1, 255, 3)),axis=1))
-        #cv2.waitKey(3)
+        #now lets take out the parts that are mostly white
+        #need to watch out for missed nuclei that are totally in the white
+        #maybe use the masks as a sanity check?
+        #or just start with the mask and then break it out ... that would actually work better?
+        #print "HEUY HEFJLDKSJFL"
+        #ssadfjkalsdfja
+        for x in xrange(idx):
+            if img[l==x].mean()>253:
+                l[l==x]=0
+            elif seg[l==x].mean()<50:
+                l[l==x]=1
+        cv2.imshow('img/l/l*255/contours',np.concatenate((img,l,l*255,cv2.drawContours(img*0, contours, -1, 255, 3)),axis=1))
+        cv2.imshow('img3',img3.astype(np.uint8))
+        cv2.waitKey(3)
         return l
 
+
+    def color_label(self,labels,colors=None):
+        out=np.zeros((labels.shape[0],labels.shape[1],3)).astype(np.uint8)
+        for x in xrange(labels.max()):
+            color = np.random.randint(0,255,(3)).tolist() 
+            out[labels==(x+1)]=color
+        return out
 
     def img_normalize(self,img):
         img_norm=((img.astype(np.float32)/img.max())*255).astype(np.uint8)
@@ -294,9 +315,9 @@ class KNN():
                 if dist<self.cutoff:
                     images_to_use.append(idx)
             if len(images_to_use)>0:
-                patch_model,super_boundary_model = self.make_index(images_to_use) #,use_all=True)
+                patch_model,super_boundary_model, super_boundary_2_model = self.make_index(images_to_use) #,use_all=True)
             else:
-                patch_model,super_boundary_model = self.make_index(nearest_wds[1][0])
+                patch_model,super_boundary_model, super_boundary_2_model = self.make_index(nearest_wds[1][0])
 
         if patch_model==None:
             if self.faiss_model==None:
@@ -346,25 +367,24 @@ class KNN():
 	reconstructed_super_boundary_2 = reconstructed[:,:,7].astype(np.uint8)
 
         _,reconstructed_super_boundary_thresh = cv2.threshold(reconstructed_super_boundary,self.super_boundary_threshold,255,cv2.THRESH_BINARY)
-        l=self.label(reconstructed_super_boundary_thresh).astype(np.int32)
-        l2=cv2.watershed(img,l.copy())
-        l2[l2==-1]=0
+        l=self.label(reconstructed_super_boundary_thresh,reconstructed_mask).astype(np.int32)-1 #background from 1 -> 0
+        l2=cv2.watershed(img,l+1)-1
+        l2[l2<0]=0
         l2=l2.astype(np.uint8)
-        cv2.imshow('watershed',l2)
-        cv2.waitKey(3)
+        #cv2.imshow('watershed',l2)
+        #cv2.waitKey(3)
         print "TODO ADD THIS ON A PER TILE BASIS? NORMALIZE THERE?"
-        #self.enhance(np.maximum(reconstructed_super_boundary,reconstructed_super_boundary_2*2).astype(np.uint8),super_boundary_model)
-        enhanced=self.enhance(self.img_normalize(reconstructed_super_boundary),self.img_normalize(reconstructed_super_boundary_2),super_boundary_model)
-        print enhanced.shape
+        enhanced=self.enhance(self.img_normalize(reconstructed_super_boundary),self.img_normalize(reconstructed_super_boundary_2),super_boundary_model,super_boundary_2_model)
         enhance_boundary = cv2.Laplacian(enhanced,cv2.CV_8U,ksize=13)
         cv2.imshow('lap',enhance_boundary)
         _,enhanced_thresh = cv2.threshold(enhanced,self.super_boundary_threshold*4,255,cv2.THRESH_BINARY)
-        cv2.imshow('en',enhanced_thresh)
-        cv2.waitKey(1000)
-        print enhanced.shape,enhanced_thresh.shape
-        enhanced_label = self.label(enhanced_thresh).astype(np.int32)
-        enhanced_label = cv2.watershed(img,enhanced_label)
-        enhanced_label[enhanced_label==-1]=0
+        #print enhanced.shape,enhanced_thresh.shape
+        enhanced_label = self.label(enhanced_thresh,reconstructed_mask).astype(np.int32)
+        enhanced_label = cv2.watershed(img,enhanced_label)-1
+        enhanced_label[enhanced_label<0]=0
         enhanced_label=enhanced_label.astype(np.uint8)
+        cv2.imshow('en',enhanced_thresh)
+        cv2.imshow('color lab l',np.concatenate((self.color_label(l,reconstructed_mask),self.color_label(l2,reconstructed_mask),self.color_label(enhanced_label,reconstructed_mask),img),axis=1))
+        cv2.waitKey(20000)
         return reconstructed_img,reconstructed_mask,reconstructed_boundary,reconstructed_blend,reconstructed_super_boundary,reconstructed_super_boundary_2,l,l2,enhanced_label
         
