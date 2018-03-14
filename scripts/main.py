@@ -526,6 +526,9 @@ def main():
     else:
         raise ValueError("Only supported models are cnn or knn")
 
+    logging.info(model)
+    logging.info('number of parameters: %d' % sum([param.nelement() for param in model.parameters()]))
+    
     # set up optimizer
     if args.optim == 'adam':
         optimizer = optim.Adam(model.parameters(), args.lr,
