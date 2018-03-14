@@ -147,6 +147,9 @@ parser.add('--random-seed', type=int, default=2018, help='set random number gene
 parser.add('--verbose', '-V', action='store_true', help='verbose logging')
 parser.add('--force-overwrite', type=int, default=0, help='overwrite existing checkpoint, if it exists')
 parser.add('--log-file', help='write logging output to file')
+parser.add('--patch-size', type=int, default=13, help="patch size")
+parser.add('--knn-n', type=int, default=5, help="average over n samples")
+parser.add('--super-boundary-threshold', type=int, default=20, help="threshold")
 
 def save_checkpoint(
         model,
@@ -223,18 +226,19 @@ valn=0
 iou_pipe=[]
 iou_l=[]
 iou_l2=[]
+iou_el=[]
 def validate_knn(model, loader, criterion):
     running_loss = 0.0
     cnt = 0
     global valn
     valn+=1
     for i, (img, (labels, labels_seg)) in enumerate(loader):
-        p_img,p_seg,p_boundary,p_blend,p_super_boundary,p_super_boundary_2,l,l2=model.predict(img)
+        p_img,p_seg,p_boundary,p_blend,p_super_boundary,p_super_boundary_2,l,l2,el=model.predict(img)
         torch_p_seg = torch.from_numpy(p_seg[None,:,:].astype(np.float)/255).float()
         #torch_p_boundary = torch.from_numpy(p_boundary[None,:,:].astype(np.float)/255).float()
         #torch_p_blend = torch.from_numpy(p_blend[None,:,:].astype(np.float)/255).float()
-        _,p_super_boundary_thresh = cv2.threshold(p_super_boundary,20,255,cv2.THRESH_BINARY)
-        _,p_super_boundary_2_thresh = cv2.threshold(p_super_boundary_2,10,255,cv2.THRESH_BINARY)
+        _,p_super_boundary_thresh = cv2.threshold(p_super_boundary,args.super_boundary_threshold,255,cv2.THRESH_BINARY)
+        _,p_super_boundary_2_thresh = cv2.threshold(p_super_boundary_2,20,255,cv2.THRESH_BINARY)
         super_boundary_combined = np.concatenate((0*p_super_boundary_thresh[:,:,None],p_super_boundary_thresh[:,:,None],p_super_boundary_2_thresh[:,:,None]),axis=2)
         border=np.full((p_img.shape[0],5,3),255).astype(np.uint8)
         up=np.concatenate((torch_to_numpy(img),border,p_img,border,cv2.cvtColor(p_boundary,cv2.COLOR_GRAY2RGB),border,cv2.cvtColor(p_blend,cv2.COLOR_GRAY2RGB),border,super_boundary_combined),axis=1)
@@ -249,14 +253,19 @@ def validate_knn(model, loader, criterion):
         #get iou using parametric
         _,p_seg_thresh = cv2.threshold(p_seg,20,255,cv2.THRESH_BINARY)
         p_seg_thresh/=255
-        img_th = parametric_pipeline(p_seg_thresh.astype(np.uint8), circle_size=4)
-        iou_pipe.append(iou_metric(img_th,torch_to_numpy(labels,scale=1)))
+        try:
+            img_th = parametric_pipeline(p_seg_thresh.astype(np.uint8), circle_size=4)
+            iou_pipe.append(iou_metric(img_th,torch_to_numpy(labels,scale=1)))
+        except:
+            print "Failed to run pipeline :("
+            iou_pipe.append(0)
         #cv2.imwrite('%d_%d_p_seg_thresh.png' % (valn,i),p_seg_thresh*255)
         #cv2.imwrite('%d_%d_img_th.png' % (valn,i),(img_th*255).astype(np.uint8))
 
         iou_l.append(iou_metric(l,torch_to_numpy(labels,scale=1)))
+        iou_el.append(iou_metric(el,torch_to_numpy(labels,scale=1)))
         iou_l2.append(iou_metric(l2,torch_to_numpy(labels,scale=1)))
-        print "IOU",iou_pipe[-1],iou_l[-1],iou_l2[-1],sum(iou_pipe)/len(iou_pipe),sum(iou_l)/len(iou_l),sum(iou_l2)/len(iou_l2)
+        print "IOU",iou_pipe[-1],iou_l[-1],iou_l2[-1],iou_el[-1],sum(iou_pipe)/len(iou_pipe),sum(iou_l)/len(iou_l),sum(iou_l2)/len(iou_l2),sum(iou_el)/len(iou_el)
 
         #cv2.imshow('pblend',p_blend)
         #cv2.waitKey(10)
@@ -302,7 +311,7 @@ def train_knn(
         if cnt > 0 and cfg['it'] % eval_every == 0:
             model.fit()
             l = validate_knn(model, valid_loader, criterion)
-            img,mask,boundary,blend=model.predict(img)
+            #img,mask,boundary,blend=model.predict(img)
             stats.append((cfg[']it'], running_loss / cnt, l))
             running_loss = 0.0
 
@@ -486,7 +495,7 @@ def main():
     scheduler=None
     if args.model in ('knn',):
         trainer=train_knn
-        model=KNN()
+        model=KNN(patch_size=args.patch_size,n=args.knn_n,super_boundary_threshold=args.super_boundary_threshold)
 
     if args.model in ('cnn',):
         trainer=train_cnn
