@@ -8,7 +8,8 @@ from transform import random_rotate90_transform1
 class KNN():
     def __init__(self,n=5,hist_n=50,patch_size=13,sample=400,gauss_blur=False,similarity=False,normalize=True,super_boundary_threshold=20,erode=False):
         print "TRY TO START WITH SUPER BOUNDARY INSTEAD OF JUST BOUNDARY>????"
-        sys.exit(1)
+        print "http://answers.opencv.org/question/60974/matching-shapes-with-hausdorff-and-shape-context-distance/"
+        #sys.exit(1)
         self.n=n # nearest patches to average
         self.nn=hist_n # nearest images to use as training
         self.super_boundary_threshold=super_boundary_threshold
@@ -65,11 +66,20 @@ class KNN():
             this_one = ((mask==(x+1))*255).astype(np.uint8)[:,:,0]
             boundary = cv2.Laplacian(this_one,cv2.CV_8U,ksize=3)
             super_boundary = np.maximum(super_boundary,boundary)
-            boundary = cv2.dilate(boundary, kernel, iterations=3)
+
+            #super boundary 2 by dilation of border
+            #boundary = cv2.dilate(boundary, kernel, iterations=3)
+            #_,boundary_thresh = cv2.threshold(boundary,100,255,cv2.THRESH_BINARY)
+            #super_boundary_2 += boundary_thresh/255
+
+            #super boundary 2 by dilation of mask
+            boundary = cv2.dilate(this_one, kernel, iterations=1)
             _,boundary_thresh = cv2.threshold(boundary,100,255,cv2.THRESH_BINARY)
             super_boundary_2 += boundary_thresh/255
         #print "X",super_boundary_2.max()
-        super_boundary_2 = (super_boundary_2>1)*255
+        super_boundary_2 = ((super_boundary_2>1)*255).astype(np.uint8)
+        cv2.imshow('sup 2',np.concatenate((super_boundary_2,mask_seg[:,:,0])))
+        cv2.waitKey(3000)
         boundary = cv2.Laplacian(mask_seg,cv2.CV_8U,ksize=3)
         boundary = boundary.reshape(boundary.shape[0],boundary.shape[1],1)
         assert(boundary.max()<=255)
@@ -101,7 +111,7 @@ class KNN():
             cur_mask[mask==idx]=255
             _, contours, hierarchy = cv2.findContours(cur_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             #assert(len(contours)==1) # hmmm
-            if len(contours)==1:
+            if len(contours)==0:
                 print "OH NO..."
             if False:
                 img=img.copy()
