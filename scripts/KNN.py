@@ -169,6 +169,7 @@ class KNN():
             
                     if True or y==1:
                         super_boundary = stacked_img[:,:,6].copy()
+                        boundary = stacked_img[:,:,4].copy()
                         #kernel = np.ones((5,5), np.uint8)
                         #super_boundary = cv2.dilate(super_boundary, kernel, iterations=2)
                         #print data_patches_super_boundary.shape
@@ -179,19 +180,24 @@ class KNN():
                         blurred_super_boundary_2=cv2.GaussianBlur(super_boundary,(3,3),0)
                         data_patches_super_boundary_2 = extract_patches_2d(blurred_super_boundary_2, (self.boundary_patch_size,self.boundary_patch_size) ,random_state=1000,max_patches=self.sample).astype(np.float64)
                         data_patches_super_boundary_2 = data_patches_super_boundary_2.reshape(data_patches_super_boundary_2.shape[0], -1)
-                        #there are patches that have a max of 0 or 1 , which results just in a solid white or black patch?
+                        ##there are patches that have a max of 0 or 1 , which results just in a solid white or black patch?
                         data_patches_super_boundary_2 = data_patches_super_boundary_2[data_patches_super_boundary_2.max(axis=1)>self.boundary_cutoff]
                         data_patches_super_boundary_2 = (data_patches_super_boundary_2 / data_patches_super_boundary_2.max(axis=1)[:,None])*255
                         self.patches_super_boundary_2.append(data_patches_super_boundary_2)
 
                         #add the blurred patches
-                        blurred_super_boundary=cv2.GaussianBlur(super_boundary,(self.boundary_blur,self.boundary_blur),0,0.1)
-                        data_patches_super_boundary = extract_patches_2d(blurred_super_boundary, (self.boundary_patch_size,self.boundary_patch_size) ,random_state=1000,max_patches=self.sample).astype(np.float64)
-                        data_patches_super_boundary = data_patches_super_boundary.reshape(data_patches_super_boundary.shape[0], -1)
-                        #there are patches that have a max of 0 or 1 , which results just in a solid white or black patch?
-                        data_patches_super_boundary = data_patches_super_boundary[data_patches_super_boundary.max(axis=1)>self.boundary_cutoff]
-                        data_patches_super_boundary = (data_patches_super_boundary / data_patches_super_boundary.max(axis=1)[:,None])*255
-                        self.patches_super_boundary.append(data_patches_super_boundary)
+                        #imgs_to_use=[super_boundary,boundary,np.maximum(super_boundary,boundary)]]
+                        imgs_to_use=[]
+                        imgs_to_use.append(cv2.GaussianBlur(super_boundary,(self.boundary_blur,self.boundary_blur),0))
+                        imgs_to_use.append(cv2.GaussianBlur(boundary,(self.boundary_blur,self.boundary_blur),0))
+                        imgs_to_use.append(cv2.GaussianBlur(np.maximum(super_boundary,boundary),(self.boundary_blur,self.boundary_blur),0))
+                        for img_to_use in imgs_to_use:
+                            mask_patches = extract_patches_2d(img_to_use, (self.boundary_patch_size,self.boundary_patch_size) ,random_state=1000,max_patches=self.sample).astype(np.float64)
+                            mask_patches = mask_patches.reshape(mask_patches.shape[0], -1)
+                            #there are patches that have a max of 0 or 1 , which results just in a solid white or black patch?
+                            mask_patches = mask_patches[mask_patches.max(axis=1)>self.boundary_cutoff]
+                            mask_patches = (mask_patches / mask_patches.max(axis=1)[:,None])*255
+                            self.patches_super_boundary.append(mask_patches)
     
         #generate the patch index
         c=self.patch_size*self.patch_size*self.channels
@@ -245,7 +251,7 @@ class KNN():
         reconstructed=super_boundary.copy()
 	gkernel=cv2.getGaussianKernel(ksize=self.boundary_patch_size,sigma=1)
 	gkernel=(gkernel*gkernel.T).reshape(-1)
-        for xx in range(5):
+        for xx in range(10):
             r=self.reconstruct(reconstructed,self.patches_super_boundary_numpy,self.boundary_patch_size,self.super_boundary_model)
             #take out border artifacts
             r[:2,:]=0
@@ -253,7 +259,7 @@ class KNN():
             r[:,:2]=0
             r[:,-2:]=0
             reconstructed = np.maximum(r , super_boundary_orig)
-        for xx in range(0):
+        for xx in range(3):
             r=self.reconstruct(reconstructed,self.patches_super_boundary_2_numpy,self.boundary_patch_size,self.super_boundary_2_model)
             #take out border artifacts
             r[:2,:]=0
@@ -262,8 +268,8 @@ class KNN():
             r[:,-2:]=0
             reconstructed = r#np.maximum(r , super_boundary_orig)
         #print reconstructed.shape,"WTF"
-        #cv2.imshow('reconstructed / orig + 2 / orig',np.concatenate((reconstructed[:,:,None],super_boundary[:,:,None],super_boundary_orig[:,:,None]),axis=1).astype(np.uint8))
-        #cv2.waitKey(10000)
+        cv2.imshow('reconstructed / orig + 2 / orig',np.concatenate((reconstructed[:,:,None],super_boundary[:,:,None],super_boundary_orig[:,:,None]),axis=1).astype(np.uint8))
+        cv2.waitKey(10000)
         return reconstructed
 
 
