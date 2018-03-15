@@ -11,9 +11,9 @@ from utils import get_history_log, csv_list
 import architectures
 from architectures import CNN
 
-def filter_hist(h, mi, ma):
-    its = [i for v,i in zip(h[0], h[1]) if i >= mi and i <= ma]
-    vs  = [v for v,i in zip(h[0], h[1]) if i >= mi and i <= ma]
+def filter_hist(h, min_it, max_it, min_y, max_y):
+    its = [i for v,i in zip(h[0], h[1]) if i >= min_it and i <= max_it and v >= min_y and v <= max_y]
+    vs  = [v for v,i in zip(h[0], h[1]) if i >= min_it and i <= max_it and v >= min_y and v <= max_y]
     return vs, its
 
 parser = configargparse.ArgumentParser(description='compare mutliple graphs')
@@ -24,6 +24,9 @@ parser.add('--what', '-w', choices=['tr_ts', 'tr', 'ts'], help='plot train or te
 parser.add('--grad', '-g', type=int, default=1, help='plot gradients?')
 parser.add('--max-iter', '-M', default=100000, type=int, help='maximum iteration')
 parser.add('--min-iter', '-m', default=-1, type=int, help='minimum iteration')
+parser.add('--max-y',  default=100000, type=int, help='maximum value to include')
+parser.add('--min-y',  default=-1, type=int, help='minimum value to include')
+
 
 args = parser.parse_args()
     
@@ -45,9 +48,9 @@ for fname in args.files:
         #        print f     
         raise ValueError('checkpoint not found: %s', fname)
     checkpoint = torch.load(fname)
-    tr.append(filter_hist(get_history_log('train_loss', checkpoint['log']), args.min_iter, args.max_iter))
-    ts.append(filter_hist(get_history_log('valid_loss', checkpoint['log']), args.min_iter, args.max_iter))
-    gr.append(filter_hist(get_history_log('grad', checkpoint['log']), args.min_iter, args.max_iter))
+    tr.append(filter_hist(get_history_log('train_loss', checkpoint['log']), args.min_iter, args.max_iter, args.min_y, args.max_y))
+    ts.append(filter_hist(get_history_log('valid_loss', checkpoint['log']), args.min_iter, args.max_iter, args.min_y, args.max_y))
+    gr.append(filter_hist(get_history_log('grad', checkpoint['log']), args.min_iter, args.max_iter, args.min_y, args.max_y))
     exps.append(checkpoint['global_state']['args'].experiment)
 
 # prepare plot
