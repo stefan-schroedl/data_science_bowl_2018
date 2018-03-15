@@ -19,7 +19,7 @@ import torch
 from torch import optim, nn
 
 from torch.autograd import Variable
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import ReduceLROnPlateau, LambdaLR
 from torch.utils.data import Dataset, DataLoader
 
 import torchvision
@@ -31,7 +31,7 @@ from sklearn.neighbors import KNeighborsClassifier
 
 import utils
 from utils import mkdir_p, csv_list, strip_end, init_logging, get_log, set_log, clear_log, insert_log, get_latest_log, get_history_log
-from adjust_learn_rate import get_learning_rate
+from adjust_learn_rate import get_learning_rate, adjust_learning_rate
 
 from KNN import *
 
@@ -41,7 +41,7 @@ import dataset
 from dataset import NucleusDataset
 
 import architectures
-from architectures import CNN
+from architectures import CNN, init_weights
 
 import post_process
 from post_process import parametric_pipeline
@@ -54,12 +54,14 @@ def get_checkpoint_file(args, it=0):
         return os.path.join(args.out_dir, 'model_save_%s.%d.pth.tar' % (args.experiment, it))
     return os.path.join(args.out_dir, 'model_save_%s.pth.tar' % args.experiment)
 
-def save_plot(fname):
+def save_plot(fname, title=None):
     train_loss, train_loss_it = get_history_log('train_loss')
     valid_loss, valid_loss_it = get_history_log('valid_loss')
     grad, grad_it = get_history_log('grad')
 
     fig, ax = plt.subplots(2, 1)
+    if title is not None:
+        fig.suptitle(title)
     ax[0].plot(train_loss_it, train_loss, 'g', label='train')
     ax[0].plot(valid_loss_it, valid_loss, 'r', label='test')
     ax[1].plot(grad_it, grad, label='grad')
@@ -93,7 +95,7 @@ parser.add('--config', '-c', default='default.cfg', is_config_file=True, help='c
 parser.add('--data', '-d', metavar='DIR', default='/Users/stefan/Documents/nucleus/input/',
            help='path to dataset')
 parser.add('--experiment', '-e', required=True, help='experiment name')
-parser.add('--out_dir', '-o', help='output directory')
+parser.add('--out-dir', '-o', help='output directory')
 parser.add('--stage', '-s', default='stage1',
            help='stage [default: %(default)s]')
 #parser.add('--arch', '-a', metavar='ARCH', default='resnet18',
@@ -113,12 +115,16 @@ parser.add('--grad-accum', default=1, type=int,
            metavar='N', help='number of batches between gradient descent [default: %(default)s]')
 parser.add('--lr', '--learning-rate', default=0.001, type=float,
            metavar='LR', help='initial learning rate [default: %(default)s]')
-parser.add('--min_lr', default=0.00001, type=float,
+parser.add('--scheduler', default='none', choices=['none', 'plateau', 'exp'],
+           help='learn rate scheduler [default: %(default)s]')
+parser.add('--min-lr', default=0.00001, type=float,
            metavar='N', help='minimum learn rate for scheduler [default: %(default)s]')
 parser.add('--momentum', '-m', default=0.9, type=float, metavar='M',
            help='momentum [default: %(default)s]')
 parser.add('--weight-decay', default=1e-4, type=float,
            metavar='W', help='weight decay [default: %(default)s]')
+parser.add('--weight-init', default='kaiming', choices=['kaiming', 'xavier', 'default'],
+           help='weight initialization method default: %(default)s]')
 parser.add('--use-instance-weights', default=0, type=int,
            metavar='N', help='apply instance weights during training [default: %(default)s]')
 parser.add('--clip-gradient', default=0.25, type=float,
@@ -142,7 +148,7 @@ parser.add('--cooldown', default=10, type=int,
            metavar='N', help='cooldown for lr scheduler [default: %(default)s]')
 parser.add('--resume', default='', type=str, metavar='PATH',
            help='path to latest checkpoint [default: %(default)s]')
-parser.add('--override-model-opts', type=csv_list, default='override-model-opts,resume,save-every',
+parser.add('--override-model-opts', type=csv_list, default='override-model-opts,resume,experiment,out-dir,save-every,print-every,eval-every,scheduler',
            help='when resuming, change these options [default: %(default)s]')
 parser.add('--evaluate', '-E', dest='evaluate', action='store_true',
            help='evaluate model on validation set')
@@ -191,15 +197,16 @@ def load_checkpoint(fname,
     except:
         pass
 
-    if global_state and 'global_state' in checkpoint:
-        for k,v in checkpoint['global_state'].iteritems():
-            global_state[k] = v
-
     if model:
         model.load_state_dict(checkpoint['model_state_dict'])
 
     if optimizer:
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+    if global_state and 'global_state' in checkpoint:
+        for k,v in checkpoint['global_state'].iteritems():
+            if k != 'args':
+                global_state[k] = v
 
     if global_state and 'args' in global_state and 'global_state' in checkpoint and 'args' in checkpoint['global_state']:
         args = global_state['args']
@@ -228,7 +235,7 @@ def load_checkpoint(fname,
     if 'global_state' in checkpoint and 'it' in checkpoint['global_state']:
         it = checkpoint['global_state']['it']
     logging.info(
-        "=> loaded checkpoint '{}' (iteration {})".format(
+        "=> loaded checkpoint '{}' (iteration {})\n".format(
             fname, it))
 
 def torch_to_numpy(t):
@@ -413,7 +420,7 @@ def train_cnn(
             if global_state['it'] % print_every == 0:
                 logging.info('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f' %
                       (epoch, global_state['it'], train_loss, l))
-                save_plot(os.path.join(global_state['args'].out_dir, 'progress.png'))
+                save_plot(os.path.join(global_state['args'].out_dir, 'progress.png'), global_state['args'].experiment)
 
             if global_state['it'] % save_every == 0:
                 is_best = False
@@ -429,16 +436,16 @@ def train_cnn(
                     is_best)
 
             scheduler.step(train_loss)
-
-            #lr_new = lr_scheduler.on_epoch_end(it, lr, train_loss)
-            #if lr_new != lr:
-            #    lr = lr_new
-            #    adjust_learning_rate(scheduler, lr)
-            lr_new = get_learning_rate(scheduler.optimizer)
-            if lr_new != global_state['lr']:
-                logging.info('[%d, %d]\tlearning rate changed from %f to %f' % (epoch, global_state['it'], global_state['lr'], lr_new))
-                global_state['lr'] = lr_new
-            insert_log(global_state['it'], 'lr', get_learning_rate(scheduler.optimizer))
+            #lr = global_state['lr']
+            #it = global_state['it'] 
+            #if lr == 0.1 and it > 30 and train_loss < .2:
+            #    logging.info('changing learn rate')
+            #    adjust_learning_rate(optimizer, 0.01)
+            #    global_state['lr'] = 0.01
+            lr = get_learning_rate(optimizer)
+            print 'LR', lr
+            global_state['lr'] = lr
+            insert_log(global_state['it'], 'lr', lr)
 
     return global_state['it'], global_state['best_loss'], global_state['best_it']
 
@@ -511,6 +518,7 @@ def main():
 
     if args.random_seed is not None:
         np.random.seed(args.random_seed)
+        torch.manual_seed(args.random_seed)
 
     global_state = {'it':0,
                     'best_loss':1e20,
@@ -526,19 +534,21 @@ def main():
     trainer = None
     model = None
     optimizer = None
-    scheduler = None
     if args.model == 'knn':
         trainer = train_knn
         model = KNN()
 
     elif args.model == 'cnn':
-        trainer=train_cnn
+        trainer = train_cnn
         model = CNN()
+        if args.weight_init != 'default':
+           init_weights(model, args.weight_init)
     else:
         raise ValueError("Only supported models are cnn or knn")
 
+    logging.info('model:\n')
     logging.info(model)
-    logging.info('number of parameters: %d' % sum([param.nelement() for param in model.parameters()]))
+    logging.info('number of parameters: %d\n' % sum([param.nelement() for param in model.parameters()]))
 
     # set up optimizer
     if args.optim == 'adam':
@@ -551,7 +561,12 @@ def main():
     else:
         raise ValueError('unknown optimization: %s' % args.optim)
 
-    scheduler = ReduceLROnPlateau(optimizer, patience=args.patience, cooldown=args.cooldown, min_lr=args.min_lr, verbose=1)
+    # set up learn rate scheduler
+    if args.scheduler == 'plateau':
+        scheduler = ReduceLROnPlateau(optimizer, patience=args.patience, cooldown=args.cooldown, min_lr=args.min_lr, verbose=1)
+    else:
+        # dummy for now
+        scheduler = LambdaLR(optimizer, lr_lambda= lambda epoch: 1.0)
 
 
     if args.use_instance_weights > 0 and args.criterion != 'bce':
@@ -591,7 +606,7 @@ def main():
         return NucleusDataset(args.data, args.stage, transform=train_transform)
     timer = timeit.Timer(load_data)
     t,dset = timer.timeit(number=1)
-    logging.info('load time: %.1f' % t)
+    logging.info('load time: %.1f\n' % t)
 
 
     # hack: this image format (1388, 1040) occurs only ones, stratify complains ..
@@ -602,7 +617,9 @@ def main():
         stratify = dset.data_df['images'].map(lambda x: '{}'.format(x.size))
     train_dset, valid_dset = dset.train_test_split(test_size=args.valid_fraction, random_state=1, shuffle=True, stratify=stratify)
     train_loader = DataLoader(train_dset, batch_size=1, shuffle=True)
-    valid_loader = DataLoader(valid_dset, batch_size=1, shuffle=True)
+    # HACK
+    #valid_loader = DataLoader(valid_dset, batch_size=1, shuffle=True)
+    valid_loader = DataLoader(train_dset, batch_size=1, shuffle=True)
 
     if args.calc_iou > 0:
         compute_iou(model, train_loader)
@@ -614,8 +631,14 @@ def main():
 
     if args.resume:
         l = validate(model, valid_loader, criterion)
-        logging.info('validation for loaded model: %s' % l)
+        logging.info('initial validation for loaded model: %s\n' % l)
 
+    logging.info('parameters:\n')
+    for k in global_state['args'].__dict__:
+        logging.info('> %s = %s' % (k, str(global_state['args'].__dict__[k])))
+    logging.info('')
+    logging.info('train set: %d; test set: %d' % (len(train_dset), len(valid_dset)))
+        
     for epoch in range(args.epochs):
         it, best_loss, best_it = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
         save_checkpoint(
@@ -624,7 +647,7 @@ def main():
             optimizer,
             global_state)
 
-        logging.info('final best: it = %d, valid = %.5f' % (best_it, best_loss))
+        logging.info('epoch best: it = %d, valid = %.5f' % (best_it, best_loss))
 
 
 if __name__ == '__main__':

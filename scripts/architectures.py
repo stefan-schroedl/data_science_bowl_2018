@@ -1,13 +1,34 @@
-#%pycat architectures.py
+#!/usr/bin/env python
 
 import torch
 import torch.autograd as autograd
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn import init
 
-torch.manual_seed(1)
 
-# class torch.nn.Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True)[source]
+def init_weights(net, method='kaiming'):
+    if method not in ['kaiming', 'xavier']:
+        raise ValueError('no such init method: %s' % method)
+    for m in net.modules():
+        classname = m.__class__.__name__
+        if classname.find('Conv') != -1:
+            if method == 'kaiming':
+                m.weight.data = init.kaiming_normal(m.weight.data)
+            else:
+                init.xavier_uniform(m.weight)
+            if m.bias is not None:
+                init.constant(m.bias, 0)
+        elif classname.find('BatchNorm') != -1:
+            m.weight.data.normal_(1.0, 0.02)
+            m.bias.data.fill_(0)
+        elif isinstance(m, nn.Linear):
+            init.normal(m.weight, std=1e-3)
+            if m.bias is not None:
+                init.constant(m.bias, 0)
+        else:
+            if m != net:
+                init_weights(m, method=method)
 
 
 class Flatten(nn.Module):
@@ -104,6 +125,7 @@ class CNN(nn.Module):
 
         self.layer7 = nn.Sequential(
             nn.Conv2d(16, 1, stride=1, kernel_size=1, padding=0))
+
 
     def forward(self, x):
         img_tp = self.mod(x)

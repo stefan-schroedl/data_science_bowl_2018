@@ -66,10 +66,12 @@ def get_latest_log(what):
     return last[what]
 
 
-def get_history_log(what):
+def get_history_log(what, log=None):
     global LOG
-    vals = [x[what] for x in LOG if what in x]
-    its = [x['it'] for x in LOG if what in x]
+    if not log:
+        log=LOG
+    vals = [x[what] for x in log if what in x]
+    its = [x['it'] for x in log if what in x]
     return vals, its
 
 
