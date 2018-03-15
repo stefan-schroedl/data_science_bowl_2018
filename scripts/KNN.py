@@ -9,6 +9,7 @@ class KNN():
     def __init__(self,n=5,hist_n=50,patch_size=13,sample=400,gauss_blur=False,similarity=False,normalize=True,super_boundary_threshold=20,erode=False):
         print "TRY TO START WITH SUPER BOUNDARY INSTEAD OF JUST BOUNDARY>????"
         print "http://answers.opencv.org/question/60974/matching-shapes-with-hausdorff-and-shape-context-distance/"
+        print "LOG SIMILAR IMAGES!!!"
         #sys.exit(1)
         self.n=n # nearest patches to average
         self.nn=hist_n # nearest images to use as training
@@ -187,12 +188,11 @@ class KNN():
 
                         #add the blurred patches
                         #imgs_to_use=[super_boundary,boundary,np.maximum(super_boundary,boundary)]]
-                        imgs_to_use=[]
-                        imgs_to_use.append(cv2.GaussianBlur(super_boundary,(self.boundary_blur,self.boundary_blur),0))
-                        imgs_to_use.append(cv2.GaussianBlur(boundary,(self.boundary_blur,self.boundary_blur),0))
-                        imgs_to_use.append(cv2.GaussianBlur(np.maximum(super_boundary,boundary),(self.boundary_blur,self.boundary_blur),0))
+                        imgs_to_use=[super_boundary,boundary,np.maximum(super_boundary,boundary)]
                         for img_to_use in imgs_to_use:
-                            mask_patches = extract_patches_2d(img_to_use, (self.boundary_patch_size,self.boundary_patch_size) ,random_state=1000,max_patches=self.sample).astype(np.float64)
+                            #add regular patches
+                            img_to_use_blurred=cv2.GaussianBlur(img_to_use,(self.boundary_blur,self.boundary_blur),0)
+                            mask_patches = extract_patches_2d(img_to_use_blurred, (self.boundary_patch_size,self.boundary_patch_size) ,random_state=1000,max_patches=self.sample).astype(np.float64)
                             mask_patches = mask_patches.reshape(mask_patches.shape[0], -1)
                             #there are patches that have a max of 0 or 1 , which results just in a solid white or black patch?
                             mask_patches = mask_patches[mask_patches.max(axis=1)>self.boundary_cutoff]
@@ -251,7 +251,7 @@ class KNN():
         reconstructed=super_boundary.copy()
 	gkernel=cv2.getGaussianKernel(ksize=self.boundary_patch_size,sigma=1)
 	gkernel=(gkernel*gkernel.T).reshape(-1)
-        for xx in range(10):
+        for xx in range(5):
             r=self.reconstruct(reconstructed,self.patches_super_boundary_numpy,self.boundary_patch_size,self.super_boundary_model)
             #take out border artifacts
             r[:2,:]=0
@@ -259,7 +259,7 @@ class KNN():
             r[:,:2]=0
             r[:,-2:]=0
             reconstructed = np.maximum(r , super_boundary_orig)
-        for xx in range(3):
+        for xx in range(0):
             r=self.reconstruct(reconstructed,self.patches_super_boundary_2_numpy,self.boundary_patch_size,self.super_boundary_2_model)
             #take out border artifacts
             r[:2,:]=0
