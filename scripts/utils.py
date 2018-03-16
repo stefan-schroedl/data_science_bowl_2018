@@ -58,10 +58,14 @@ def insert_log(it, k, v):
         LOG = [last]
     last[k] = v
 
-def get_latest_log(what):
+def get_latest_log(what, default=None):
     global LOG
     last = LOG[-1]
     if what not in last:
+        msg = 'no such key in log: %s' % what
+        if default:
+            logging.warning(msg)
+            return default
         raise ValueError('no such key in log: %s' % what)
     return last[what]
 
@@ -85,7 +89,7 @@ def init_logging(opts={}):
         filename = opts.log_file.replace('$','').format(**os.environ)
     verbose = False
     if hasattr(opts, 'verbose'):
-        verbose = opts.verbose
+        verbose = opts.verbose>0
     logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO, format="[%(asctime)s\t%(process)d\t%(levelname)s]\t%(message\
 )s", datefmt="%Y%m%d %H:%M:%S", filename=filename)
 

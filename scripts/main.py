@@ -57,13 +57,19 @@ def get_checkpoint_file(args, it=0):
 def save_plot(fname, title=None):
     train_loss, train_loss_it = get_history_log('train_loss')
     valid_loss, valid_loss_it = get_history_log('valid_loss')
+    try:
+        final_loss, final_loss_it = get_history_log('final_train_loss')
+    except:
+        final_loss, final_loss_it = None, None
     grad, grad_it = get_history_log('grad')
 
     fig, ax = plt.subplots(2, 1)
     if title is not None:
         fig.suptitle(title)
-    ax[0].plot(train_loss_it, train_loss, 'g', label='train')
-    ax[0].plot(valid_loss_it, valid_loss, 'r', label='test')
+    ax[0].plot(train_loss_it, train_loss, 'g', label='tr')
+    if final_loss:
+        ax[0].plot(train_loss_it, train_loss, 'b', label='tr_final')
+    ax[0].plot(valid_loss_it, valid_loss, 'r', label='ts')
     ax[1].plot(grad_it, grad, label='grad')
     ax[0].grid(True, 'both')
     ax[0].legend()
@@ -123,6 +129,8 @@ parser.add('--momentum', '-m', default=0.9, type=float, metavar='M',
            help='momentum [default: %(default)s]')
 parser.add('--weight-decay', default=1e-4, type=float,
            metavar='W', help='weight decay [default: %(default)s]')
+parser.add('--history-size', type=int, default=100, help='history size for lbfgs [default: %(default)s]')
+parser.add('--max-iter-lbfgs', type=int, default=20, help='maximum iterations for lbfgs [default: %(default)s]')
 parser.add('--weight-init', default='kaiming', choices=['kaiming', 'xavier', 'default'],
            help='weight initialization method default: %(default)s]')
 parser.add('--use-instance-weights', default=0, type=int,
@@ -131,7 +139,7 @@ parser.add('--clip-gradient', default=0.25, type=float,
            metavar='C', help='clip excessive gradients during training [default: %(default)s]')
 parser.add('--criterion', '-C', default='mse', choices=['mse','bce','jaccard','dice'],
            metavar='C', help='loss function [default: %(default)s]')
-parser.add('--optim', '-O', default='sgd', choices=['sgd','adam'],
+parser.add('--optim', '-O', default='sgd', choices=['sgd','adam','lbfgs'],
            help='optimization algorithm [default: %(default)s]')
 parser.add('--valid-fraction', '-v', default=0.25, type=float,
            help='validation set fraction [default: %(default)s]')
@@ -154,7 +162,7 @@ parser.add('--evaluate', '-E', dest='evaluate', action='store_true',
            help='evaluate model on validation set')
 parser.add('--calc-iou', type=int, default=0, help='calculate iou and exit')
 parser.add('--random-seed', type=int, default=2018, help='set random number generator seed [default: %(default)s]')
-parser.add('--verbose', '-V', action='store_true', help='verbose logging')
+parser.add('--verbose', '-V', type=int, default=0, help='verbose logging')
 parser.add('--force-overwrite', type=int, default=0, help='overwrite existing checkpoint, if it exists')
 parser.add('--log-file', help='write logging output to file')
 
@@ -178,7 +186,7 @@ def save_checkpoint(fname,
     torch.save(s, fname)
 
     if is_best:
-        logging.info('new best: it = %d, train = %.5f, valid = %.5f' % (get_latest_log('it'), get_latest_log('train_loss'), get_latest_log('valid_loss')))
+        logging.info('new best: it = %d, train = %.5f, valid = %.5f' % (get_latest_log('it'), get_latest_log('train_loss', float('nan')), get_latest_log('valid_loss', float('nan'))))
         pref = strip_end(fname, '.pth.tar')
         shutil.copyfile(fname, '%s_best.pth.tar' % pref)
 
@@ -200,7 +208,7 @@ def load_checkpoint(fname,
     if model:
         model.load_state_dict(checkpoint['model_state_dict'])
 
-    if optimizer:
+    if optimizer and (not global_state['args'] or 'optim' in global_state['args'].override_model_opts):
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
     if global_state and 'global_state' in checkpoint:
@@ -244,7 +252,7 @@ def torch_to_numpy(t):
 def validate_knn(model, loader, criterion):
     running_loss = 0.0
     cnt = 0
-    for i, (img, (labels, labels_seg)) in enumerate(loader):
+    for i, (img, (labels, labels_seg)) in tqdm(enumerate(loader), 'test'):
         p_img,p_seg,p_boundary,p_blend=model.predict(img)
         torch_p_seg = torch.from_numpy(p_seg[None,:,:].astype(np.float)/255).float()
         #torch_p_boundary = torch.from_numpy(p_boundary[None,:,:].astype(np.float)/255).float()
@@ -350,104 +358,140 @@ def backprop_weight(labels, img, global_state, thresh=0.1):
     return w
 
 
-def train_cnn(
-        train_loader,
-        valid_loader,
-        model,
-        criterion,
-        optimizer,
-        scheduler,
-        epoch,
-        eval_every,
-        print_every,
-        save_every,
-        global_state):
+def train_cnn (train_loader,
+               valid_loader,
+               model,
+               criterion,
+               optimizer,
+               scheduler,
+               epoch,
+               eval_every,
+               print_every,
+               save_every,
+               global_state):
 
-    running_loss = 0.0
-    running_grad = 0.0
-    valid_cnt = 0
-    grad_cnt = 0
+    is_lbfgs = global_state['args'].optim == 'lbfgs'
+    accum_total = global_state['args'].grad_accum
 
-    # global it, best_it, best_loss, args, lr
+    # slightly ugly: to accommodate  lbfgs with gradient accumulation, we need to control the dataset with low
+    # level function
 
-    for global_state['it'], (img, (labels, labels_seg)) in tqdm(enumerate(train_loader, global_state['it'] + 1)):
+    #for global_state['it'], (img, (labels, labels_seg)) in tqdm(enumerate(train_loader, global_state['it'] + 1)):
 
-        img, labels_seg = Variable(img), Variable(labels_seg)
+    _train_loader = train_loader.__iter__()
 
-        model.train(True)
+    # PYTHON WEIRDNESS: using scalar inside closure gives error!
+    # https://stackoverflow.com/questions/4851463/python-closure-write-to-variable-in-parent-scope
 
-        outputs = model(img)
+    acc = [] # train data buffer, needed for gradient accumulation with lbfgs
+    running_loss = [0.0]
+    running_cnt = [0]
+    final_loss = [0.0]
+    final_loss_cnt = [0]
+    inner_cnt = [0]
 
-        if global_state['args'].use_instance_weights > 0:
-            w = backprop_weight(labels.numpy().squeeze(), outputs.data[0].numpy().squeeze(), global_state)
-            criterion._buffers['weights'] = torch.FloatTensor([w])
+    # helper function to do forward and accumulative backward passes on acc buffer
+    def closure():
+        optimizer.zero_grad()
+        logging.debug('start inner %d' % inner_cnt[0])
+        loss = 0
+        for  (img, (labels, labels_seg)) in tqdm(acc, 'train'):
+            if global_state['args'].use_instance_weights > 0:
+                w = backprop_weight(labels.numpy().squeeze(), outputs.data[0].numpy().squeeze(), global_state)
+                criterion._buffers['weights'] = torch.FloatTensor([w])
+            img, labels_seg = Variable(img), Variable(labels_seg)
+            outputs = model(img)
+            loss = criterion(outputs, labels_seg)
+            final_loss[0] += loss.data[0]
+            final_loss_cnt[0] += 1
+            if inner_cnt[0] == 0:
+                running_loss[0] += loss.data[0]
+                running_cnt[0] += 1
+            logging.debug('loss: %s', loss.data.numpy()[0])
+            loss.backward()
+        inner_cnt[0] += 1
+        return loss
 
-        loss = criterion(outputs, labels_seg)
+    more_data = True
+    while more_data:
 
-        # gradient accumulation
-        accum_total = global_state['args'].grad_accum
-        accum_step = global_state['grad_accum_it']
-        if accum_step == 0:
-            optimizer.zero_grad()
-        loss.backward()
-        valid_cnt += 1
-        running_loss += loss.data[0]
+        acc = []
+        running_loss = [0.0]
+        running_cnt = [0]
+        final_loss = [0.0]
+        final_loss_cnt = [0]
+        inner_cnt = [0]
 
-        if accum_step == accum_total - 1:
+        model.train()
+        for i in range(global_state['args'].grad_accum):
+            try:
+                acc.append(_train_loader.next())
+            except StopIteration:
+                more_data = False
+                break
+
+        if len(acc) > 0:
+            grad = float('nan')
             if global_state['args'].clip_gradient > 0:
                 grad = torch.nn.utils.clip_grad_norm(model.parameters(), global_state['args'].clip_gradient)
-                running_grad += grad
-                grad_cnt += 1
-            optimizer.step()
-        accum_step = (accum_step + 1) % accum_total
-        global_state['grad_accum_it'] = accum_step
-
-
-        if valid_cnt > 0 and global_state['it'] % eval_every == 0:
-            l = validate(model, valid_loader, criterion)
-            train_loss = running_loss / valid_cnt
-            insert_log(global_state['it'], 'train_loss', train_loss)
-            insert_log(global_state['it'], 'valid_loss', l)
-            running_loss = 0.0
-            valid_cnt = 0
-
-            if grad_cnt > 0:
-                train_grad = running_grad / grad_cnt
-                insert_log(global_state['it'], 'grad', running_grad / grad_cnt)
-                running_grad = 0.0
-                grad_cnt = 0
-
-            if global_state['it'] % print_every == 0:
-                logging.info('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f' %
-                      (epoch, global_state['it'], train_loss, l))
-                save_plot(os.path.join(global_state['args'].out_dir, 'progress.png'), global_state['args'].experiment)
-
-            if global_state['it'] % save_every == 0:
-                is_best = False
-                if global_state['best_loss'] > l:
-                    global_state['best_loss'] = l
-                    global_state['best_it'] = global_state['it']
-                    is_best = True
-                save_checkpoint(
-                    get_checkpoint_file(global_state['args']),
-                    model,
-                    optimizer,
-                    global_state,
-                    is_best)
-
-            scheduler.step(train_loss)
-            #lr = global_state['lr']
-            #it = global_state['it'] 
-            #if lr == 0.1 and it > 30 and train_loss < .2:
-            #    logging.info('changing learn rate')
-            #    adjust_learning_rate(optimizer, 0.01)
-            #    global_state['lr'] = 0.01
+    
+            if not is_lbfgs:
+                closure()
+                optimizer.step()
+            else:
+                optimizer.step(closure)
+    
+            it = global_state['it'] + 1
+            it_last = it + len(acc)
+            train_loss = running_loss[0] / running_cnt[0]
+            insert_log(it, 'train_loss', train_loss)
+    
+            if is_lbfgs:
+                final_train_loss = final_loss[0] / final_loss_cnt[0]
+                logging.debug('final loss: %f', final_train_loss)
+                insert_log(it, 'final_train_loss', final_train_loss)
+    
+            # if grad == grad:
+            insert_log(it, 'grad', grad)
+            
+            for i in range(it, it + len(acc)):
+                if i % eval_every == 0:
+                    l = validate(model, valid_loader, criterion)
+                    insert_log(i, 'valid_loss', l)
+                    
+                if i % print_every == 0:
+                    logging.info('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f\tlr: %g' %
+                                 (epoch, i, train_loss, l, global_state['lr']))
+                    save_plot(os.path.join(global_state['args'].out_dir, 'progress.png'), global_state['args'].experiment)
+        
+                if i % save_every == 0:
+                    is_best = False
+                    if global_state['best_loss'] > l:
+                        global_state['best_loss'] = l
+                        global_state['best_it'] = global_state['it']
+                        is_best = True
+                    save_checkpoint(
+                        get_checkpoint_file(global_state['args']),
+                        model,
+                        optimizer,
+                        global_state,
+                        is_best)
+    
+            if global_state['args'].scheduler != 'none':
+                scheduler.step(train_loss)
+                #lr = global_state['lr']
+                #it = global_state['it'] 
+                #if lr == 0.1 and it > 30 and train_loss < .2:
+                #    logging.info('changing learn rate')
+                #    adjust_learning_rate(optimizer, 0.01)
+    
+            global_state['it'] = it_last
+    
             lr = get_learning_rate(optimizer)
-            print 'LR', lr
             global_state['lr'] = lr
             insert_log(global_state['it'], 'lr', lr)
-
-    return global_state['it'], global_state['best_loss'], global_state['best_it']
+        
+        return global_state['it'], global_state['best_loss'], global_state['best_it']
 
 
 def baseline(
@@ -501,7 +545,15 @@ def train_transform(img, mask, mask_seg):
 def main():
     # global it, best_it, best_loss, LOG, args
     args = parser.parse_args()
-    args.override_model_opts = [x.replace('-','_') for x in args.override_model_opts]
+
+    # in overrides, replace '-' by '_', and check that it is indeed an option
+    new_overrides = []
+    for x in args.override_model_opts:
+        x_new = x.replace('-','_')
+        if x_new not in args.__dict__:
+            raise ValueError('overriding option %s does not exist' % x)
+        new_overrides.insert(0, x_new)
+    args.override_model_opts = new_overrides
 
     if args.out_dir is None:
        args.out_dir = 'experiments/%s' % args.experiment
@@ -525,7 +577,6 @@ def main():
                     'best_it':0,
                     'lr':args.lr,
                     'args':args,
-                    'grad_accum_it':0,
                     'bp_wt_sum':0.05,
                     'bp_wt_cnt': 10,}
 
@@ -558,16 +609,22 @@ def main():
         optimizer = optim.SGD(model.parameters(), args.lr,
                            momentum = args.momentum,
                            weight_decay = args.weight_decay)
+    elif args.optim == 'lbfgs':
+        optimizer = optim.LBFGS(model.parameters(),
+                                lr = args.lr,
+                                max_iter = args.max_iter_lbfgs,
+                                history_size = args.history_size)
     else:
         raise ValueError('unknown optimization: %s' % args.optim)
 
     # set up learn rate scheduler
+    scheduler = None
     if args.scheduler == 'plateau':
         scheduler = ReduceLROnPlateau(optimizer, patience=args.patience, cooldown=args.cooldown, min_lr=args.min_lr, verbose=1)
-    else:
+    elif args.scheduler == 'exp':
         # dummy for now
         scheduler = LambdaLR(optimizer, lr_lambda= lambda epoch: 1.0)
-
+        raise ValueError('not implemented')
 
     if args.use_instance_weights > 0 and args.criterion != 'bce':
         raise ValueError('instance weights currently only supported for bce criterion')
@@ -629,16 +686,18 @@ def main():
         validate(model, valid_loader, criterion)
         return
 
-    if args.resume:
-        l = validate(model, valid_loader, criterion)
-        logging.info('initial validation for loaded model: %s\n' % l)
+
+    l = validate(model, valid_loader, criterion)
+    logging.info('initial validation: %s\n' % l)
+    if args.resume is None:
+        insert_log(0, 'valid_loss', l)
 
     logging.info('parameters:\n')
     for k in global_state['args'].__dict__:
         logging.info('> %s = %s' % (k, str(global_state['args'].__dict__[k])))
     logging.info('')
     logging.info('train set: %d; test set: %d' % (len(train_dset), len(valid_dset)))
-        
+
     for epoch in range(args.epochs):
         it, best_loss, best_it = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
         save_checkpoint(

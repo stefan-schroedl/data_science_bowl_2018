@@ -20,7 +20,7 @@ parser = configargparse.ArgumentParser(description='compare mutliple graphs')
 
 parser.add('files', nargs='+', type=str, help='comma-delimited list of checkpoint files')
 parser.add('--out', '-o', help='file name for output image', default='compare.png')
-parser.add('--what', '-w', choices=['tr_ts', 'tr', 'ts'], help='plot train or test', default='tr_ts')
+parser.add('--what', '-w', type=csv_list, default='tr,tr_f,ts', help='plot train, train final, or test')
 parser.add('--grad', '-g', type=int, default=1, help='plot gradients?')
 parser.add('--max-iter', '-M', default=100000, type=int, help='maximum iteration')
 parser.add('--min-iter', '-m', default=-1, type=int, help='minimum iteration')
@@ -50,6 +50,11 @@ for fname in args.files:
     checkpoint = torch.load(fname)
     tr.append(filter_hist(get_history_log('train_loss', checkpoint['log']), args.min_iter, args.max_iter, args.min_y, args.max_y))
     ts.append(filter_hist(get_history_log('valid_loss', checkpoint['log']), args.min_iter, args.max_iter, args.min_y, args.max_y))
+    tr_f = None
+    try:
+        tr_f.append(filter_hist(get_history_log('final_train_loss', checkpoint['log']), args.min_iter, args.max_iter, args.min_y, args.max_y))
+    except:
+        pass
     gr.append(filter_hist(get_history_log('grad', checkpoint['log']), args.min_iter, args.max_iter, args.min_y, args.max_y))
     exps.append(checkpoint['global_state']['args'].experiment)
 
@@ -63,11 +68,14 @@ else:
 
 c = 0
 for i in range(len(exps)):
-    if args.what in ['tr', 'tr_ts']:
+    if 'tr' in args.what:
         ax0.plot(tr[i][1], tr[i][0], colors[c], label='tr ' + exps[i])
         c = (c + 1) % len(colors)
-    if args.what in ['ts', 'tr_ts']:
+    if 'ts' in args.what:
         ax0.plot(ts[i][1], ts[i][0], colors[c], label='ts ' + exps[i])
+        c = (c + 1) % len(colors)
+    if 'tr_f' in args.what and tr_f is not None:
+        ax0.plot(ts[i][1], tr_f[i][0], colors[c], label='ts ' + exps[i])
         c = (c + 1) % len(colors)
 
 c = 0
