@@ -275,7 +275,7 @@ def validate(model, loader, criterion):
     model.eval()
     running_loss = 0.0
     cnt = 0
-    for i, (img, (labels, labels_seg)) in enumerate(loader):
+    for i, (img, (labels, labels_seg)) in tqdm(enumerate(loader), 'test'):
         img, labels_seg = Variable(img), Variable(labels_seg)
         outputs = model(img)
         loss = criterion(outputs, labels_seg)
