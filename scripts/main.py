@@ -132,6 +132,7 @@ parser.add('--weight-decay', default=1e-4, type=float,
            metavar='W', help='weight decay [default: %(default)s]')
 parser.add('--history-size', type=int, default=100, help='history size for lbfgs [default: %(default)s]')
 parser.add('--max-iter-lbfgs', type=int, default=20, help='maximum iterations for lbfgs [default: %(default)s]')
+parser.add('--tolerance-change', type=float, default=0.01, help='tolerance for termination for lbfgs [default: %(default)s]')
 parser.add('--weight-init', default='kaiming', choices=['kaiming', 'xavier', 'default'],
            help='weight initialization method default: %(default)s]')
 parser.add('--use-instance-weights', default=0, type=int,
@@ -454,11 +455,13 @@ def train_cnn (train_loader,
     
             # if grad == grad:
             insert_log(it, 'grad', grad)
-            
+
+            validated = False
             for i in range(it, it + len(acc)):
-                if i % eval_every == 0:
+                if i % eval_every == 0 and not validated:
                     l = validate(model, valid_loader, criterion)
                     insert_log(i, 'valid_loss', l)
+                    validated = True
                     
                 if i % print_every == 0:
                     logging.info('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f\tlr: %g' %
@@ -614,7 +617,8 @@ def main():
         optimizer = optim.LBFGS(model.parameters(),
                                 lr = args.lr,
                                 max_iter = args.max_iter_lbfgs,
-                                history_size = args.history_size)
+                                history_size = args.history_size,
+                                tolerance_change= args.tolerance_change)
     else:
         raise ValueError('unknown optimization: %s' % args.optim)
 
