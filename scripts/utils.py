@@ -60,14 +60,20 @@ def insert_log(it, k, v):
 
 def get_latest_log(what, default=None):
     global LOG
-    last = LOG[-1]
-    if what not in last:
+    latest_row = []
+    latest_it = -1
+    for row in LOG[::-1]:
+        if row['it'] > latest_it and what in row:
+            latest_it = row['it']
+            latest_row = row
+
+    if latest_it == -1 or what not in latest_row:
         msg = 'no such key in log: %s' % what
         if default:
             logging.warning(msg)
             return default
         raise ValueError('no such key in log: %s' % what)
-    return last[what]
+    return latest_row[what], latest_it
 
 
 def get_history_log(what, log=None):

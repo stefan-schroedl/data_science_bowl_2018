@@ -158,7 +158,7 @@ parser.add('--cooldown', default=10, type=int,
            metavar='N', help='cooldown for lr scheduler [default: %(default)s]')
 parser.add('--resume', default='', type=str, metavar='PATH',
            help='path to latest checkpoint [default: %(default)s]')
-parser.add('--override-model-opts', type=csv_list, default='override-model-opts,resume,experiment,out-dir,save-every,print-every,eval-every,scheduler',
+parser.add('--override-model-opts', type=csv_list, default='override-model-opts,resume,experiment,out-dir,save-every,print-every,eval-every,scheduler,log-file',
            help='when resuming, change these options [default: %(default)s]')
 parser.add('--evaluate', '-E', dest='evaluate', action='store_true',
            help='evaluate model on validation set')
@@ -188,7 +188,7 @@ def save_checkpoint(fname,
     torch.save(s, fname)
 
     if is_best:
-        logging.info('new best: it = %d, train = %.5f, valid = %.5f' % (get_latest_log('it'), get_latest_log('train_loss', float('nan')), get_latest_log('valid_loss', float('nan'))))
+        logging.info('new best: it = %d, train = %.5f, valid = %.5f' % (get_latest_log('it')[0], get_latest_log('train_loss', float('nan'))[0], get_latest_log('valid_loss', float('nan'))[0]))
         pref = strip_end(fname, '.pth.tar')
         shutil.copyfile(fname, '%s_best.pth.tar' % pref)
 
@@ -210,7 +210,7 @@ def load_checkpoint(fname,
     if model:
         model.load_state_dict(checkpoint['model_state_dict'])
 
-    if optimizer and (not global_state['args'] or 'optim' in global_state['args'].override_model_opts):
+    if optimizer and (not global_state['args'] or not('optim' in global_state['args'].override_model_opts)):
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
     if global_state and 'global_state' in checkpoint:
@@ -275,7 +275,7 @@ def validate(model, loader, criterion):
     model.eval()
     running_loss = 0.0
     cnt = 0
-    for i, (img, (labels, labels_seg)) in tqdm(enumerate(loader), 'test'):
+    for i, (img, (labels, labels_seg)) in tqdm(enumerate(loader), desc='test', total=loader.__len__()):
         img, labels_seg = Variable(img), Variable(labels_seg)
         outputs = model(img)
         loss = criterion(outputs, labels_seg)
@@ -470,6 +470,7 @@ def train_cnn (train_loader,
         
                 if i % save_every == 0:
                     is_best = False
+                    l = get_latest_log('valid_loss')[0]
                     if global_state['best_loss'] > l:
                         global_state['best_loss'] = l
                         global_state['best_it'] = global_state['it']
