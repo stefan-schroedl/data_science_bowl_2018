@@ -57,18 +57,19 @@ def get_checkpoint_file(args, it=0):
 def save_plot(fname, title=None):
     train_loss, train_loss_it = get_history_log('train_loss')
     valid_loss, valid_loss_it = get_history_log('valid_loss')
+    final_loss, final_loss_it = None, None
     try:
         final_loss, final_loss_it = get_history_log('final_train_loss')
     except:
-        final_loss, final_loss_it = None, None
+        pass
     grad, grad_it = get_history_log('grad')
 
     fig, ax = plt.subplots(2, 1)
     if title is not None:
         fig.suptitle(title)
     ax[0].plot(train_loss_it, train_loss, 'g', label='tr')
-    if final_loss:
-        ax[0].plot(train_loss_it, train_loss, 'b', label='tr_final')
+    if final_loss is not None:
+        ax[0].plot(final_loss_it, final_loss, 'b', label='tr_final')
     ax[0].plot(valid_loss_it, valid_loss, 'r', label='ts')
     ax[1].plot(grad_it, grad, label='grad')
     ax[0].grid(True, 'both')

@@ -32,6 +32,7 @@ args = parser.parse_args()
     
 model = architectures.CNN()
 tr = []
+tr_f = []
 ts = []
 gr = []
 exps = []
@@ -48,9 +49,10 @@ for fname in args.files:
         #        print f     
         raise ValueError('checkpoint not found: %s', fname)
     checkpoint = torch.load(fname)
+    #get_history_log('final_train_loss', checkpoint['log'])
+
     tr.append(filter_hist(get_history_log('train_loss', checkpoint['log']), args.min_iter, args.max_iter, args.min_y, args.max_y))
     ts.append(filter_hist(get_history_log('valid_loss', checkpoint['log']), args.min_iter, args.max_iter, args.min_y, args.max_y))
-    tr_f = None
     try:
         tr_f.append(filter_hist(get_history_log('final_train_loss', checkpoint['log']), args.min_iter, args.max_iter, args.min_y, args.max_y))
     except:
@@ -74,8 +76,8 @@ for i in range(len(exps)):
     if 'ts' in args.what:
         ax0.plot(ts[i][1], ts[i][0], colors[c], label='ts ' + exps[i])
         c = (c + 1) % len(colors)
-    if 'tr_f' in args.what and tr_f is not None:
-        ax0.plot(ts[i][1], tr_f[i][0], colors[c], label='ts ' + exps[i])
+    if 'tr_f' in args.what and len(tr_f) > 0:
+        ax0.plot(tr_f[i][1], tr_f[i][0], colors[c], label='ts ' + exps[i])
         c = (c + 1) % len(colors)
 
 c = 0
