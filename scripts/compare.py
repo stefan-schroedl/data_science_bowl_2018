@@ -24,8 +24,8 @@ parser.add('--what', '-w', type=csv_list, default='tr,tr_f,ts', help='plot train
 parser.add('--grad', '-g', type=int, default=1, help='plot gradients?')
 parser.add('--max-iter', '-M', default=100000, type=int, help='maximum iteration')
 parser.add('--min-iter', '-m', default=-1, type=int, help='minimum iteration')
-parser.add('--max-y',  default=100000, type=int, help='maximum value to include')
-parser.add('--min-y',  default=-1, type=int, help='minimum value to include')
+parser.add('--max-y',  default=100000, type=float, help='maximum value to include')
+parser.add('--min-y',  default=-1, type=float, help='minimum value to include')
 
 
 args = parser.parse_args()
@@ -33,6 +33,7 @@ args = parser.parse_args()
 model = architectures.CNN()
 tr = []
 tr_f = []
+w = []
 ts = []
 gr = []
 exps = []
@@ -57,6 +58,10 @@ for fname in args.files:
         tr_f.append(filter_hist(get_history_log('final_train_loss', checkpoint['log']), args.min_iter, args.max_iter, args.min_y, args.max_y))
     except:
         pass
+    try:
+        w.append(filter_hist(get_history_log('bp_wt', checkpoint['log']), args.min_iter, args.max_iter, args.min_y, args.max_y))
+    except:
+        pass
     gr.append(filter_hist(get_history_log('grad', checkpoint['log']), args.min_iter, args.max_iter, args.min_y, args.max_y))
     exps.append(checkpoint['global_state']['args'].experiment)
 
@@ -79,6 +84,10 @@ for i in range(len(exps)):
     if 'tr_f' in args.what and len(tr_f) > 0:
         ax0.plot(tr_f[i][1], tr_f[i][0], colors[c], label='ts ' + exps[i])
         c = (c + 1) % len(colors)
+    if 'w' in args.what and len(w) > 0:
+        ax0.plot(w[i][1], w[i][0], colors[c], label='w ' + exps[i])
+        c = (c + 1) % len(colors)
+
 
 c = 0
 if args.grad > 0:

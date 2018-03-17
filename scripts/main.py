@@ -9,17 +9,20 @@ import copy
 import timeit
 import time
 import logging
+import math
 
 from tqdm import tqdm
 
 import numpy as np
 import matplotlib.pyplot as plt
 
+import scipy
+
 import torch
 from torch import optim, nn
 
 from torch.autograd import Variable
-from torch.optim.lr_scheduler import ReduceLROnPlateau, LambdaLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau, LambdaLR,  MultiStepLR
 from torch.utils.data import Dataset, DataLoader
 
 import torchvision
@@ -30,7 +33,7 @@ import cv2
 from sklearn.neighbors import KNeighborsClassifier
 
 import utils
-from utils import mkdir_p, csv_list, strip_end, init_logging, get_log, set_log, clear_log, insert_log, get_latest_log, get_history_log
+from utils import mkdir_p, csv_list, int_list, strip_end, init_logging, get_log, set_log, clear_log, insert_log, get_latest_log, get_history_log
 from adjust_learn_rate import get_learning_rate, adjust_learning_rate
 
 from KNN import *
@@ -122,8 +125,9 @@ parser.add('--grad-accum', default=1, type=int,
            metavar='N', help='number of batches between gradient descent [default: %(default)s]')
 parser.add('--lr', '--learning-rate', default=0.001, type=float,
            metavar='LR', help='initial learning rate [default: %(default)s]')
-parser.add('--scheduler', default='none', choices=['none', 'plateau', 'exp'],
+parser.add('--scheduler', default='none', choices=['none', 'plateau', 'exp', 'multistep'],
            help='learn rate scheduler [default: %(default)s]')
+parser.add('--scheduler_milestones', type=int_list, default='200', help='milestones for multistep scheduler')
 parser.add('--min-lr', default=0.00001, type=float,
            metavar='N', help='minimum learn rate for scheduler [default: %(default)s]')
 parser.add('--momentum', '-m', default=0.9, type=float, metavar='M',
@@ -326,16 +330,22 @@ def train_knn(
 def compute_iou(model, loader):
     model.eval()
     pred = [(model(Variable(img,requires_grad=False)).data.numpy().squeeze(), mask.numpy().squeeze()) for img, (mask,mask_seg) in tqdm(iter(loader))]
-    img_th = [(parametric_pipeline(img, circle_size=4), mask) for img, mask in pred]
-    ious = [iou_metric(i,m) for (i,m) in img_th]
+    #img_th = [(parametric_pipeline(img, circle_size=4), mask) for img, mask in pred]
+    thresh = -0.1
+    img_th = [(x > thresh).astype(int) for x,_ in pred]
+    img_l = [scipy.ndimage.label(x)[0] for x in img_th]
+    ious = [iou_metric(i,m[1]) for (i,m) in zip(img_l,pred)]
     msg = 'iou: mean = %.5f, med = %.5f' % (np.mean(ious), np. median(ious))
     logging.info(msg)
     print msg
 
 
-def backprop_weight(labels, img, global_state, thresh=0.1):
-    img_th = parametric_pipeline(img, circle_size=4)
-    union, intersection, area_true, area_pred = union_intersection(labels, img_th)
+def backprop_weight(labels, pred, global_state, thresh=0.1):
+    #img_th = parametric_pipeline(pred, circle_size=4)
+    thresh = 0.5
+    img_th = (pred > -0.1).astype(int)
+    img_l = scipy.ndimage.label(img_th)[0]
+    union, intersection, area_true, area_pred = union_intersection(labels, img_l)
 
     # Compute the intersection over union
     iou = intersection.astype(float) / union
@@ -353,6 +363,7 @@ def backprop_weight(labels, img, global_state, thresh=0.1):
         w = 1.0 / denom
 
     # normalize with running average
+    insert_log(global_state['it'], 'bp_wt', w)
     w = w / (global_state['bp_wt_sum'] / global_state['bp_wt_cnt'])
     global_state['bp_wt_sum'] += w
     global_state['bp_wt_cnt'] += 1
@@ -398,11 +409,12 @@ def train_cnn (train_loader,
         logging.debug('start inner %d' % inner_cnt[0])
         loss = 0
         for  (img, (labels, labels_seg)) in tqdm(acc, 'train'):
+            img, labels_seg = Variable(img), Variable(labels_seg)
+            outputs = model(img)
             if global_state['args'].use_instance_weights > 0:
                 w = backprop_weight(labels.numpy().squeeze(), outputs.data[0].numpy().squeeze(), global_state)
                 criterion._buffers['weights'] = torch.FloatTensor([w])
-            img, labels_seg = Variable(img), Variable(labels_seg)
-            outputs = model(img)
+
             loss = criterion(outputs, labels_seg)
             final_loss[0] += loss.data[0]
             final_loss_cnt[0] += 1
@@ -460,6 +472,8 @@ def train_cnn (train_loader,
             for i in range(it, it + len(acc)):
                 if i % eval_every == 0 and not validated:
                     l = validate(model, valid_loader, criterion)
+                    if math.isnan(l):
+                        raise ValueError('iteration %d - loss is nan - something went wrong ...' % i)
                     insert_log(i, 'valid_loss', l)
                     validated = True
                     
@@ -627,6 +641,11 @@ def main():
     scheduler = None
     if args.scheduler == 'plateau':
         scheduler = ReduceLROnPlateau(optimizer, patience=args.patience, cooldown=args.cooldown, min_lr=args.min_lr, verbose=1)
+    elif args.scheduler == 'multistep':
+        if args.scheduler_milestones is None or len(args.scheduler_milestones) == 0:
+            raise ValueError('scheduler-milestones cannot be empty for multi-step')
+        milestones = [1.0 * x / args.grad_accum for x in args.scheduler_milestones]
+        scheduler = MultiStepLR(optimizer, milestones)
     elif args.scheduler == 'exp':
         # dummy for now
         scheduler = LambdaLR(optimizer, lr_lambda= lambda epoch: 1.0)

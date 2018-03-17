@@ -113,6 +113,12 @@ def csv_list(init):
     l = [x.strip() for x in l if len(x)]
     return l
 
+def int_list(init):
+    l=init.split(',')
+    l = [int(x.strip()) for x in l if len(x)]
+    return l
+
+
 def mkdir_p(path):
     try:
         os.makedirs(path)
