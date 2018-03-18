@@ -411,7 +411,7 @@ def train_cnn (train_loader,
 
     _train_loader = train_loader.__iter__()
 
-    # PYTHON WEIRDNESS: using scalar inside closure gives error!
+    # PYTHON WEIRDNESS: using scalar inside closure gives error! Therefore using arrays with one element
     # https://stackoverflow.com/questions/4851463/python-closure-write-to-variable-in-parent-scope
 
     acc = [] # train data buffer, needed for gradient accumulation with lbfgs
@@ -422,7 +422,7 @@ def train_cnn (train_loader,
     inner_cnt = [0]
     weight_sum = [0.0]
     weight_cnt = [0]
-
+            
     # helper function to do forward and accumulative backward passes on acc buffer
     def closure():
         optimizer.zero_grad()
@@ -440,12 +440,19 @@ def train_cnn (train_loader,
             loss = criterion(outputs, labels_seg)
             final_loss[0] += loss.data[0]
             final_loss_cnt[0] += 1
-            if inner_cnt[0] == 0:
+            if inner_cnt[0] == 0: # for lbfgs, only record the first eval!
                 running_loss[0] += loss.data[0]
                 running_cnt[0] += 1
             logging.debug('loss: %s', loss.data.numpy()[0])
             loss.backward()
+
+        if global_state['args'].clip_gradient > 0:
+            gradi = torch.nn.utils.clip_grad_norm(model.parameters(), global_state['args'].clip_gradient)
+            if inner_cnt[0] == 0: # for lbfgs, only record the first eval!
+                grad[0] = gradi
+
         inner_cnt[0] += 1
+
         return loss
 
     more_data = True
@@ -459,7 +466,9 @@ def train_cnn (train_loader,
         inner_cnt = [0]
         weight_sum = [0.0]
         weight_cnt = [0]
-
+        grad = [float('nan')]
+        it = global_state['it']
+    
         model.train()
         for i in range(global_state['args'].grad_accum):
             try:
@@ -469,9 +478,6 @@ def train_cnn (train_loader,
                 break
 
         if len(acc) > 0:
-            grad = float('nan')
-            if global_state['args'].clip_gradient > 0:
-                grad = torch.nn.utils.clip_grad_norm(model.parameters(), global_state['args'].clip_gradient)
 
             if not is_lbfgs:
                 closure()
@@ -479,9 +485,12 @@ def train_cnn (train_loader,
             else:
                 optimizer.step(closure)
 
-            it = global_state['it']
             train_loss = running_loss[0] / running_cnt[0]
             insert_log(it, 'train_loss', train_loss)
+
+            if not math.isnan(grad[0]):
+                insert_log(it, 'grad', grad[0])
+
             if weight_cnt[0] > 0:
                 insert_log(it, 'bp_wt', weight_sum[0]/weight_cnt[0])
 
@@ -489,9 +498,6 @@ def train_cnn (train_loader,
                 final_train_loss = final_loss[0] / final_loss_cnt[0]
                 logging.debug('final loss: %f', final_train_loss)
                 insert_log(it, 'final_train_loss', final_train_loss)
-
-            # if grad == grad:
-            insert_log(it, 'grad', grad)
 
             validated = False
             for i in range(it, it + len(acc)):
@@ -764,7 +770,7 @@ def main():
     LBFGS = 0
     for epoch in range(args.epochs):
         # HACK
-        if 0 and global_state['it'] >= 200 and LBFGS == 0 and get_latest_log('valid_loss', float('nan'))[0] < 0.3:
+        if 1 and global_state['it'] >= 200 and LBFGS == 0 and get_latest_log('valid_loss', float('nan'))[0] < 0.3:
             LBFGS = 1
             optimizer = optim.LBFGS(model.parameters(),
                                     lr = 0.8,

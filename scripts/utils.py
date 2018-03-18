@@ -46,6 +46,7 @@ def set_log(l):
 
 def insert_log(it, k, v):
     global LOG
+    #logging.info('INSERT %s %s %s' % ( it, k, v))
     if len(LOG) > 0:
         last = LOG[-1]
         if last['it'] > it:

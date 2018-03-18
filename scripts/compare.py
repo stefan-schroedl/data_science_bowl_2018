@@ -12,8 +12,11 @@ import architectures
 from architectures import CNN
 
 def filter_hist(h, min_it, max_it, min_y, max_y):
-    its = [i for v,i in zip(h[0], h[1]) if i >= min_it and i <= max_it and v >= min_y and v <= max_y]
-    vs  = [v for v,i in zip(h[0], h[1]) if i >= min_it and i <= max_it and v >= min_y and v <= max_y]
+    #its = [i for v,i in zip(h[0], h[1]) if i >= min_it and i <= max_it and v >= min_y and v <= max_y]
+    #vs  = [v for v,i in zip(h[0], h[1]) if i >= min_it and i <= max_it and v >= min_y and v <= max_y]
+    its = [i for v,i in zip(h[0], h[1]) if i >= min_it and i <= max_it]
+    vs  = [min(max(v, min_y), max_y) for v,i in zip(h[0], h[1]) if i >= min_it and i <= max_it]
+
     return vs, its
 
 parser = configargparse.ArgumentParser(description='compare mutliple graphs')
@@ -72,20 +75,22 @@ else:
 c = 0
 for exp_name in hist:
     for k in args.what:
+        if k == 'grad':
+            next
         try:
             v,i = filter_hist(get_history_log(what_dict[k], hist[exp_name]), args.min_iter, args.max_iter, args.min_y, args.max_y)
             ax0.plot(i, v, colors[c], label=k + ' ' + exp_name)
             c = (c + 1) % len(colors)
         except:
-            print 'fail', k, exp_name
             pass
 
 if args.grad > 0:
     c = 0
     for exp_name in hist:
+
         try:
             v,i = filter_hist(get_history_log('grad', hist[exp_name]), args.min_iter, args.max_iter, args.min_y, args.max_y)
-            ax0.plot(i, v, colors[c], label='grad ' + exp_name)
+            ax[1].plot(i, v, colors[c], label='grad ' + exp_name)
             c = (c + 1) % len(colors)
         except:
             pass
