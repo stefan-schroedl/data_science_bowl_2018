@@ -20,7 +20,7 @@ parser = configargparse.ArgumentParser(description='compare mutliple graphs')
 
 parser.add('files', nargs='+', type=str, help='comma-delimited list of checkpoint files')
 parser.add('--out', '-o', help='file name for output image', default='compare.png')
-parser.add('--what', '-w', type=csv_list, default='tr,tr_f,ts', help='plot train, train final, or test')
+parser.add('--what', '-w', type=csv_list, default='tr,tr_f,ts', help='list of plot types (tr, ts, tr_f, w, iou)')
 parser.add('--grad', '-g', type=int, default=1, help='plot gradients?')
 parser.add('--max-iter', '-M', default=100000, type=int, help='maximum iteration')
 parser.add('--min-iter', '-m', default=-1, type=int, help='minimum iteration')
@@ -40,7 +40,15 @@ exps = []
 
 colors = ['b', 'g', 'r', 'c', 'm', 'y', 'k']
 
+what_dict = {'tr':'train_loss', 'ts':'valid_loss', 'tr_f':'final_train_loss', 'w':'bp_wt', 'iou':'valid_iou'}
+
+for k in args.what:
+    if not k in what_dict:
+        raise ValueError('unknown history type: %s' % k)
+
 # collect histories
+
+hist = {}
 
 for fname in args.files:
     if not os.path.isfile(fname):
@@ -50,20 +58,8 @@ for fname in args.files:
         #        print f     
         raise ValueError('checkpoint not found: %s', fname)
     checkpoint = torch.load(fname)
-    #get_history_log('final_train_loss', checkpoint['log'])
+    hist[checkpoint['global_state']['args'].experiment] =  checkpoint['log']
 
-    tr.append(filter_hist(get_history_log('train_loss', checkpoint['log']), args.min_iter, args.max_iter, args.min_y, args.max_y))
-    ts.append(filter_hist(get_history_log('valid_loss', checkpoint['log']), args.min_iter, args.max_iter, args.min_y, args.max_y))
-    try:
-        tr_f.append(filter_hist(get_history_log('final_train_loss', checkpoint['log']), args.min_iter, args.max_iter, args.min_y, args.max_y))
-    except:
-        pass
-    try:
-        w.append(filter_hist(get_history_log('bp_wt', checkpoint['log']), args.min_iter, args.max_iter, args.min_y, args.max_y))
-    except:
-        pass
-    gr.append(filter_hist(get_history_log('grad', checkpoint['log']), args.min_iter, args.max_iter, args.min_y, args.max_y))
-    exps.append(checkpoint['global_state']['args'].experiment)
 
 # prepare plot
 if args.grad > 0:
@@ -74,26 +70,27 @@ else:
     ax0 = ax
 
 c = 0
-for i in range(len(exps)):
-    if 'tr' in args.what:
-        ax0.plot(tr[i][1], tr[i][0], colors[c], label='tr ' + exps[i])
-        c = (c + 1) % len(colors)
-    if 'ts' in args.what:
-        ax0.plot(ts[i][1], ts[i][0], colors[c], label='ts ' + exps[i])
-        c = (c + 1) % len(colors)
-    if 'tr_f' in args.what and len(tr_f) > 0:
-        ax0.plot(tr_f[i][1], tr_f[i][0], colors[c], label='ts ' + exps[i])
-        c = (c + 1) % len(colors)
-    if 'w' in args.what and len(w) > 0:
-        ax0.plot(w[i][1], w[i][0], colors[c], label='w ' + exps[i])
-        c = (c + 1) % len(colors)
+for exp_name in hist:
+    for k in args.what:
+        try:
+            v,i = filter_hist(get_history_log(what_dict[k], hist[exp_name]), args.min_iter, args.max_iter, args.min_y, args.max_y)
+            ax0.plot(i, v, colors[c], label=k + ' ' + exp_name)
+            c = (c + 1) % len(colors)
+        except:
+            print 'fail', k, exp_name
+            pass
 
-
-c = 0
 if args.grad > 0:
-    for i in range(len(exps)):
-        ax[1].plot(gr[i][1], gr[i][0], colors[c], label='grad ' + exps[i])
-        c = (c + 1) % len(colors)
+    c = 0
+    for exp_name in hist:
+        try:
+            v,i = filter_hist(get_history_log('grad', hist[exp_name]), args.min_iter, args.max_iter, args.min_y, args.max_y)
+            ax0.plot(i, v, colors[c], label='grad ' + exp_name)
+            c = (c + 1) % len(colors)
+        except:
+            pass
+
+
     ax[1].grid(True, 'both')
     ax[1].legend()
 
