@@ -43,7 +43,7 @@ exps = []
 
 colors = ['b', 'g', 'r', 'c', 'm', 'y', 'k']
 
-what_dict = {'tr':'train_loss', 'ts':'valid_loss', 'tr_f':'final_train_loss', 'w':'bp_wt', 'iou':'valid_iou'}
+what_dict = {'tr':'train_loss', 'ts':'valid_loss', 'tr_f':'final_train_loss', 'w':'bp_wt', 'iou':'valid_iou', 'e':'epoch_train_loss'}
 
 for k in args.what:
     if not k in what_dict:

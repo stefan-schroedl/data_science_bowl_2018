@@ -22,7 +22,8 @@ import torch
 from torch import optim, nn
 
 from torch.autograd import Variable
-from torch.optim.lr_scheduler import ReduceLROnPlateau, LambdaLR,  MultiStepLR
+from torch.optim.lr_scheduler import LambdaLR,  MultiStepLR
+from my_lr_scheduler import ReduceLROnPlateau2
 from torch.utils.data import Dataset, DataLoader
 
 import torchvision
@@ -60,9 +61,9 @@ def get_checkpoint_file(args, it=0):
 def save_plot(fname, title=None):
     train_loss, train_loss_it = get_history_log('train_loss')
     valid_loss, valid_loss_it = get_history_log('valid_loss')
-    final_loss, final_loss_it = None, None
+    epoch_loss, epoch_loss_it = None, None
     try:
-        final_loss, final_loss_it = get_history_log('final_train_loss')
+        epoch_loss, epoch_loss_it = get_history_log('epoch_train_loss')
     except:
         pass
     grad, grad_it = get_history_log('grad')
@@ -71,8 +72,8 @@ def save_plot(fname, title=None):
     if title is not None:
         fig.suptitle(title)
     ax[0].plot(train_loss_it, train_loss, 'g', label='tr')
-    if final_loss is not None:
-        ax[0].plot(final_loss_it, final_loss, 'b', label='tr_final')
+    if epoch_loss is not None:
+        ax[0].plot(epoch_loss_it, epoch_loss, 'b', label='e')
     ax[0].plot(valid_loss_it, valid_loss, 'r', label='ts')
     ax[1].plot(grad_it, grad, label='grad')
     ax[0].grid(True, 'both')
@@ -128,7 +129,7 @@ parser.add('--lr', '--learning-rate', default=0.001, type=float,
 parser.add('--scheduler', default='none', choices=['none', 'plateau', 'exp', 'multistep'],
            help='learn rate scheduler [default: %(default)s]')
 parser.add('--scheduler_milestones', type=int_list, default='200', help='milestones for multistep scheduler')
-parser.add('--min-lr', default=0.00001, type=float,
+parser.add('--min-lr', default=0.0001, type=float,
            metavar='N', help='minimum learn rate for scheduler [default: %(default)s]')
 parser.add('--momentum', '-m', default=0.9, type=float, metavar='M',
            help='momentum [default: %(default)s]')
@@ -156,10 +157,14 @@ parser.add('--save-every', '-S', default=10, type=int,
            metavar='N', help='save frequency [default: %(default)s]')
 parser.add('--eval-every', default=10, type=int,
            metavar='N', help='eval frequency [default: %(default)s]')
-parser.add('--patience', default=10, type=int,
-           metavar='N', help='patience for lr scheduler [default: %(default)s]')
-parser.add('--cooldown', default=10, type=int,
+parser.add('--patience', default=3, type=int,
+           metavar='N', help='patience for lr scheduler, in epochs [default: %(default)s]')
+parser.add('--patience-threshold', default=.1, type=float,
+           metavar='N', help='patience threshold for lr scheduler [default: %(default)s]')
+parser.add('--cooldown', default=100, type=int,
            metavar='N', help='cooldown for lr scheduler [default: %(default)s]')
+parser.add('--switch-to-lbfgs', default=0, type=int,
+           metavar='N', help='if lr scheduler reduces rate, switch to lbfgs [default: %(default)s]')
 parser.add('--resume', default='', type=str, metavar='PATH',
            help='path to latest checkpoint [default: %(default)s]')
 parser.add('--override-model-opts', type=csv_list, default='override-model-opts,resume,experiment,out-dir,save-every,print-every,eval-every,scheduler,log-file',
@@ -358,35 +363,39 @@ def compute_iou(model, loader):
 
 
 def backprop_weight(labels, pred, global_state, thresh=0.1):
-    #logging.info('BP %s' % (1.0 / (labels.flatten().max() + 1.0)))
-    return 1.0 / (labels.flatten().max() + 1.0)
-    #img_th = parametric_pipeline(pred, circle_size=4)
-    thresh = 0.5
-    img_th = (pred > -0.1).astype(int)
-    img_l = scipy.ndimage.label(img_th)[0]
-    union, intersection, area_true, area_pred = union_intersection(labels, img_l)
 
-    # Compute the intersection over union
-    iou = intersection.astype(float) / union
+    w =  1.0 / (labels.flatten().max() + 1.0)
 
-    tp, fp, fn, matches_by_pred, matches_by_target = precision_at(iou, thresh)
+    if 0:
+        #img_th = parametric_pipeline(pred, circle_size=4)
+        thresh = 0.5
+        img_th = (pred > -0.1).astype(int)
+        img_l = scipy.ndimage.label(img_th)[0]
+        union, intersection, area_true, area_pred = union_intersection(labels, img_l)
 
-    w = 1.0
+        # Compute the intersection over union
+        iou = intersection.astype(float) / union
 
-    denom = 1.0 * (tp + fp + fn)
+        tp, fp, fn, matches_by_pred, matches_by_target = precision_at(iou, thresh)
 
-    if tp + fn == 0.0:
-        w = 0.0
+        w = 1.0
 
-    if denom > 0.0:
-        w = 1.0 / denom
+        denom = 1.0 * (tp + fp + fn)
+        
+        if tp + fn == 0.0:
+            w = 0.0
+
+        if denom > 0.0:
+            w = 1.0 / denom
 
     # normalize with running average
-    w = w / (global_state['bp_wt_sum'] / global_state['bp_wt_cnt'])
+    
+    w_norm = w / (global_state['bp_wt_sum'] / global_state['bp_wt_cnt'])
+
     global_state['bp_wt_sum'] += w
     global_state['bp_wt_cnt'] += 1
 
-    return w
+    return w_norm
 
 
 def train_cnn (train_loader,
@@ -422,7 +431,11 @@ def train_cnn (train_loader,
     inner_cnt = [0]
     weight_sum = [0.0]
     weight_cnt = [0]
-            
+
+    epoch_train_loss = 0
+    epoch_final_train_loss = 0
+    epoch_cnt = 0
+
     # helper function to do forward and accumulative backward passes on acc buffer
     def closure():
         optimizer.zero_grad()
@@ -435,7 +448,8 @@ def train_cnn (train_loader,
                 w = backprop_weight(labels.numpy().squeeze(), outputs.data[0].numpy().squeeze(), global_state)
                 weight_sum[0] += w
                 weight_cnt[0] += 1
-                criterion._buffers['weights'] = torch.FloatTensor([w])
+                criterion.weight = torch.FloatTensor([w])
+                #criterion.weight = outputs.data.clone().fill_(w)
 
             loss = criterion(outputs, labels_seg)
             final_loss[0] += loss.data[0]
@@ -468,7 +482,7 @@ def train_cnn (train_loader,
         weight_cnt = [0]
         grad = [float('nan')]
         it = global_state['it']
-    
+
         model.train()
         for i in range(global_state['args'].grad_accum):
             try:
@@ -487,6 +501,9 @@ def train_cnn (train_loader,
 
             train_loss = running_loss[0] / running_cnt[0]
             insert_log(it, 'train_loss', train_loss)
+
+            epoch_train_loss += running_loss[0]
+            epoch_cnt += len(acc)
 
             if not math.isnan(grad[0]):
                 insert_log(it, 'grad', grad[0])
@@ -512,6 +529,9 @@ def train_cnn (train_loader,
                 if i % print_every == 0:
                     logging.info('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f\tiou: %.3f\tlr: %g' %
                                  (epoch, i, train_loss, l, iou, global_state['lr']))
+                    if global_state['args'].use_instance_weights > 0:
+                        logging.debug('[%d, %d]\tavg instance weight: %.3f' %
+                                      (epoch, i, global_state['bp_wt_sum'] /  global_state['bp_wt_cnt']))
                     save_plot(os.path.join(global_state['args'].out_dir, 'progress.png'), global_state['args'].experiment)
 
                 if i % save_every == 0:
@@ -530,29 +550,7 @@ def train_cnn (train_loader,
 
             global_state['it'] += len(acc)
 
-            if global_state['args'].scheduler != 'none':
-                # note: different interface!
-                # ReduceLROnPlateau.step() takes metrics as argument,
-                # other schedulers take epoch number
-                if isinstance(scheduler, ReduceLROnPlateau):
-                    scheduler.step(train_loss)
-                else:
-                    scheduler.step(global_state['it'])
-                #lr = global_state['lr']
-                #it = global_state['it']
-                #if lr == 0.1 and it > 30 and train_loss < .2:
-                #    logging.info('changing learn rate')
-                #    adjust_learning_rate(optimizer, 0.01)
-
-            lr_new = get_learning_rate(optimizer)
-            lr_old = global_state['lr']
-            if lr_new != lr_new:
-                logging.info('[%d, %d]\tLR changed from %f to %f.' %
-                             (epoch, global_state['it'], lr_old, lr_new))
-                global_state['lr'] = lr_new
-            insert_log(global_state['it'], 'lr', lr_new)
-
-    return global_state['it'], global_state['best_loss'], global_state['best_it']
+    return global_state['it'], global_state['best_loss'], global_state['best_it'], epoch_train_loss / epoch_cnt
 
 
 def baseline(
@@ -638,7 +636,7 @@ def main():
                     'best_it':0,
                     'lr':args.lr,
                     'args':args,
-                    'bp_wt_sum':0.05,
+                    'bp_wt_sum':0.1,
                     'bp_wt_cnt': 10,}
 
     # create model
@@ -682,7 +680,10 @@ def main():
     # set up learn rate scheduler
     scheduler = None
     if args.scheduler == 'plateau':
-        scheduler = ReduceLROnPlateau(optimizer, patience=args.patience, cooldown=args.cooldown, min_lr=args.min_lr, verbose=1)
+        scheduler = ReduceLROnPlateau2(optimizer, patience=args.patience,
+                                       patience_threshold=args.patience_threshold,
+                                       cooldown=args.cooldown,
+                                       min_lr=args.min_lr, verbose=1)
     elif args.scheduler == 'multistep':
         if args.scheduler_milestones is None or len(args.scheduler_milestones) == 0:
             raise ValueError('scheduler-milestones cannot be empty for multi-step')
@@ -753,10 +754,10 @@ def main():
         return
 
 
-    l, iou = validate(model, valid_loader, criterion, True)
-    logging.info('initial validation: %.3f %.3f\n' % (l, iou))
-    global_state['best_loss'] = l
-    global_state['best_it'] = 0
+    #l, iou = validate(model, valid_loader, criterion, True)
+    #logging.info('initial validation: %.3f %.3f\n' % (l, iou))
+    #global_state['best_loss'] = l
+    #global_state['best_it'] = 0
 
     if args.resume is None:
         insert_log(0, 'valid_loss', l)
@@ -770,7 +771,7 @@ def main():
     LBFGS = 0
     for epoch in range(args.epochs):
         # HACK
-        if 1 and global_state['it'] >= 200 and LBFGS == 0 and get_latest_log('valid_loss', float('nan'))[0] < 0.3:
+        if 0 and global_state['it'] >= 200 and LBFGS == 0 and get_latest_log('valid_loss', float('nan'))[0] < 0.3:
             LBFGS = 1
             optimizer = optim.LBFGS(model.parameters(),
                                     lr = 0.8,
@@ -783,12 +784,49 @@ def main():
             args.optim = 'lbfgs'
             logging.info('changing optim to lbfgs')
 
-        it, best_loss, best_it = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
+        it, best_loss, best_it, epoch_loss = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
         save_checkpoint(
             get_checkpoint_file(global_state['args'], global_state['it']),
             model,
             optimizer,
             global_state)
+
+        insert_log(global_state['it'], 'epoch_train_loss', epoch_loss)
+
+        if global_state['args'].scheduler != 'none':
+            # note: different interface!
+            # ReduceLROnPlateau.step() takes metrics as argument,
+            # other schedulers take epoch number
+            if isinstance(scheduler, ReduceLROnPlateau2):
+                scheduler.step(epoch_loss, epoch)
+            else:
+                scheduler.step(epoch)
+
+            lr_new = get_learning_rate(optimizer)
+            lr_old = global_state['lr']
+            if lr_old!= lr_new:
+                if not args.switch_to_lbfgs:
+                    logging.info('[%d, %d]\tLR changed from %f to %f.' %
+                                 (epoch, global_state['it'], lr_old, lr_new))
+                    global_state['lr'] = lr_new
+                    insert_log(global_state['it'], 'lr', lr_new)
+                else:
+                    logging.info('[%d, %d]\tswitching to lbfgs' %
+                                 (epoch, global_state['it']))
+                    optimizer = optim.LBFGS(model.parameters(),
+                                            lr = 0.8,
+                                            max_iter = args.max_iter_lbfgs,
+                                            history_size = args.history_size,
+                                            tolerance_change = args.tolerance_change)
+                    global_state['args'].grad_accum = len(train_loader)
+                    args.grad_accum = len(train_loader)
+                    global_state['args'].optim == 'lbfgs'
+                    args.optim = 'lbfgs'
+                    global_state['args'].clip_gradient = 0
+                    args.clip_gradient = 0
+                    global_state['args'].scheduler = 'none'
+                    args.scheduler = 'none'
+                    insert_log(global_state['it'], 'lr', 0.8)
 
         logging.info('epoch best: it = %d, valid = %.5f' % (best_it, best_loss))
 
