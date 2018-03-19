@@ -192,8 +192,10 @@ parser.add('--patience', default=3, type=int,
            metavar='N', help='patience for lr scheduler, in epochs [default: %(default)s]')
 parser.add('--patience-threshold', default=.1, type=float,
            metavar='N', help='patience threshold for lr scheduler [default: %(default)s]')
-parser.add('--cooldown', default=100, type=int,
+parser.add('--cooldown', default=5, type=int,
            metavar='N', help='cooldown for lr scheduler [default: %(default)s]')
+parser.add('--lr-decay', default=.1, type=float,
+           metavar='N', help='decay factor for lr scheduler [default: %(default)s]')
 parser.add('--switch-to-lbfgs', default=0, type=int,
            metavar='N', help='if lr scheduler reduces rate, switch to lbfgs [default: %(default)s]')
 parser.add('--resume', default='', type=str, metavar='PATH',
@@ -255,7 +257,7 @@ def load_checkpoint(fname,
 
     if global_state and 'global_state' in checkpoint:
         for k,v in checkpoint['global_state'].iteritems():
-            if k != 'args':
+            if k != 'args' and k not in global_state['args'].override_model_opts:
                 global_state[k] = v
 
     if global_state and 'args' in global_state and 'global_state' in checkpoint and 'args' in checkpoint['global_state']:
@@ -536,8 +538,10 @@ def train_cnn (train_loader,
                 optimizer.step(closure)
 
             train_loss = running_loss.avg
-            if math.isnan(train_loss) or train_loss > 1000:
-                msg = 'iteration %d - training exploded ...' % i
+
+            blowup = False
+            if math.isnan(train_loss):
+                msg = 'iteration %d - training blew up ...' % it
                 logging.error(msg)
                 raise TrainingBlowupError(msg)
 
@@ -716,7 +720,9 @@ def main():
     # set up learn rate scheduler
     scheduler = None
     if args.scheduler == 'plateau':
-        scheduler = ReduceLROnPlateau2(optimizer, patience=args.patience,
+        scheduler = ReduceLROnPlateau2(optimizer,
+                                       factor=args.lr_decay,
+                                       patience=args.patience,
                                        patience_threshold=args.patience_threshold,
                                        cooldown=args.cooldown,
                                        min_lr=args.min_lr, verbose=1)
@@ -726,8 +732,8 @@ def main():
         scheduler = MultiStepLR(optimizer, args.scheduler_milestones)
     elif args.scheduler == 'exp':
         # dummy for now
-        scheduler = LambdaLR(optimizer, lr_lambda= lambda epoch: 1.0)
-        raise ValueError('not implemented')
+        scheduler = LambdaLR(optimizer, lr_lambda=lambda epoch: args.lr_decay)
+
 
     if args.use_instance_weights > 0 and args.criterion != 'bce':
         raise ValueError('instance weights currently only supported for bce criterion')
@@ -807,6 +813,18 @@ def main():
     for epoch in range(args.epochs):
         try:
             it, best_loss, best_it, epoch_loss, epoch_iou = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
+
+            logging.info('[%d, %d]\ttrain loss in epoch: %.3f, iou=%.3f' %
+                         (epoch, global_state['it'], epoch_loss, epoch_iou))
+ 
+
+            # check for blowup
+            last_epoch_loss = get_latest_log('epoch_train_loss', 1e20)[0]
+            if not math.isnan(last_epoch_loss) and epoch_loss > 10.0 * last_epoch_loss:
+                msg = 'iteration %d - training blew up ...' % it
+                logging.error(msg)
+                raise TrainingBlowupError(msg)
+
             save_checkpoint(
                 get_checkpoint_file(global_state['args'], global_state['it']),
                 model,
@@ -827,7 +845,7 @@ def main():
 
                 lr_new = get_learning_rate(optimizer)
                 lr_old = global_state['lr']
-                if lr_old!= lr_new:
+                if lr_old != lr_new:
                     if not args.switch_to_lbfgs:
                         logging.info('[%d, %d]\tLR changed from %f to %f.' %
                                      (epoch, global_state['it'], lr_old, lr_new))
@@ -836,8 +854,9 @@ def main():
                     else:
                         logging.info('[%d, %d]\tswitching to lbfgs' %
                                      (epoch, global_state['it']))
+                        lr = 0.8
                         optimizer = optim.LBFGS(model.parameters(),
-                                                lr = 0.8,
+                                                lr = lr,
                                                 max_iter = args.max_iter_lbfgs,
                                                 history_size = args.history_size,
                                                 tolerance_change = args.tolerance_change)
@@ -847,9 +866,17 @@ def main():
                         args.optim = 'lbfgs'
                         global_state['args'].clip_gradient = 1e20
                         args.clip_gradient = 0
-                        global_state['args'].scheduler = 'none'
-                        args.scheduler = 'none'
-                        insert_log(global_state['it'], 'lr', 0.8)
+                        global_state['args'].scheduler = 'plateau'
+                        args.scheduler = 'plateau'
+                        global_state['lr'] = lr
+                        insert_log(global_state['it'], 'lr', lr)
+
+                        scheduler = ReduceLROnPlateau2(optimizer,
+                                                       factor=0.9,
+                                                       patience=1,
+                                                       patience_threshold=0.1,
+                                                       min_lr=0.1, verbose=1)
+
 
             logging.info('epoch best: it = %d, valid = %.5f' % (best_it, best_loss))
 
@@ -876,8 +903,15 @@ def main():
                 args.optim = 'lbfgs'
                 global_state['args'].clip_gradient = 1e20
                 args.clip_gradient = 0
-                global_state['args'].scheduler = 'none'
-                args.scheduler = 'none'
+                global_state['args'].scheduler = 'plateau'
+                args.scheduler = 'plateau'
+
+                scheduler = ReduceLROnPlateau2(optimizer,
+                                               factor=0.9,
+                                               patience=1,
+                                               patience_threshold=0.1,
+                                               min_lr=0.1, verbose=1)
+
                 logging.error('recovered from checkpoint %s, lr = %f. keeping fingers crossed ...' % (ckpt, lr))
             else:
                 logging.error('cannot recover ... terminating.')
