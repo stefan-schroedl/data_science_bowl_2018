@@ -311,9 +311,9 @@ def validate_knn(model, loader, criterion):
     l = running_loss / cnt
     return l
 
-def iou_metric_tensor(pred, labels, thresh=0.0):
+def iou_metric_tensor(labels, pred, thresh=0.0):
 
-    if pred.data.max() < thresh or pred.data.min() < thresh: # shortcut
+    if pred.data.max() < thresh or pred.data.min() > thresh: # shortcut
         return 0.0
 
     pred_np = pred.data.numpy().squeeze()
@@ -321,7 +321,7 @@ def iou_metric_tensor(pred, labels, thresh=0.0):
 
     img_th = (pred_np > thresh).astype(int)
     img_l = scipy.ndimage.label(img_th)[0]
-    return iou_metric(img_l, img_l)
+    return iou_metric(labels_np, img_l)
 
 def validate(model, loader, criterion, calc_iou=False):
     model.eval()
@@ -337,7 +337,7 @@ def validate(model, loader, criterion, calc_iou=False):
         cnt = cnt + 1
 
         if calc_iou:
-            sum_iou += iou_metric_tensor(pred, labels)
+            sum_iou += iou_metric_tensor(labels, pred)
 
     l = running_loss / cnt
     iou = sum_iou / cnt
@@ -383,18 +383,27 @@ def train_knn(
     return global_state['it'], global_state['best_loss'], global_state['best_it']
 
 
-def compute_iou(model, loader):
+def compute_iou0(model, loader):
     model.eval()
     pred = [(model(Variable(img,requires_grad=False)).data.numpy().squeeze(), mask.numpy().squeeze()) for img, (mask,mask_seg) in tqdm(iter(loader))]
     #img_th = [(parametric_pipeline(img, circle_size=4), mask) for img, mask in pred]
     thresh = 0.0
     img_th = [(x > thresh).astype(int) for x,_ in pred]
     img_l = [scipy.ndimage.label(x)[0] for x in img_th]
-    ious = [iou_metric(i,m[1]) for (i,m) in zip(img_l,pred)]
+    ious = [iou_metric(m[1],i) for (i,m) in zip(img_l,pred)]
     msg = 'iou: mean = %.5f, med = %.5f' % (np.mean(ious), np. median(ious))
     logging.info(msg)
     print msg
 
+
+def compute_iou(model, loader):
+    model.eval()
+    pred = [(model(Variable(img,requires_grad=False)), mask) for img, (mask,mask_seg) in tqdm(iter(loader))]
+    ious = [iou_metric_tensor(m, i) for (i,m) in pred]
+    msg = 'iou: mean = %.5f, med = %.5f' % (np.mean(ious), np. median(ious))
+    logging.info(msg)
+    print msg
+    
 
 def backprop_weight(labels, pred, global_state, thresh=0.1):
 
@@ -484,7 +493,7 @@ def train_cnn (train_loader,
             if inner_cnt[0] == 0: # for lbfgs, only record the first eval!
                 running_loss.update(loss.data[0])
                 loss_stats.update(loss.data[0])
-                iou_stats.update(iou_metric_tensor(pred, labels))
+                iou_stats.update(iou_metric_tensor(labels, pred))
             logging.debug('loss: %s', loss.data.numpy()[0])
 
             loss.backward()
