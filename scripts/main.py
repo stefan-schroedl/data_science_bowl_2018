@@ -10,6 +10,8 @@ import timeit
 import time
 import logging
 import math
+import re
+import glob
 
 from tqdm import tqdm
 
@@ -54,10 +56,38 @@ from loss import iou_metric, diagnose_errors, show_compare_gt, union_intersectio
 
 from meter import AverageMeter
 
+class TrainingBlowupError(Exception):
+    def __init__(self, message, errors=None):
+
+        # Call the base class constructor with the parameters it needs
+        super(TrainingBlowupError, self).__init__(message)
+
+        # Now for your custom code...
+        self.errors = errors
+
 def get_checkpoint_file(args, it=0):
     if it > 0:
         return os.path.join(args.out_dir, 'model_save_%s.%d.pth.tar' % (args.experiment, it))
     return os.path.join(args.out_dir, 'model_save_%s.pth.tar' % args.experiment)
+
+
+def get_latest_checkpoint_file(args):
+    last_it = -1
+    last_ckpt = ''
+    pattern = re.compile('model_save_%s.(?P<it>[0-9]+).pth.tar' % args.experiment)
+    for path, dirs, files in os.walk(args.out_dir):
+        for file in files:
+            m = pattern.match(file)
+            if m:
+                print file
+                it = int(m.group(1))
+                if it > last_it:
+                    last_it = it
+                    last_ckpt = file
+    if last_it == -1:
+        raise ValueError('no previous checkpoint')
+    return os.path.join(args.out_dir, last_ckpt)
+
 
 def save_plot(fname, title=None):
     train_loss, train_loss_it = get_history_log('train_loss')
@@ -291,7 +321,7 @@ def iou_metric_tensor(pred, labels, thresh=0.0):
 
     img_th = (pred_np > thresh).astype(int)
     img_l = scipy.ndimage.label(img_th)[0]
-    return iou_metric(l, img_l)
+    return iou_metric(img_l, img_l)
 
 def validate(model, loader, criterion, calc_iou=False):
     model.eval()
@@ -497,6 +527,11 @@ def train_cnn (train_loader,
                 optimizer.step(closure)
 
             train_loss = running_loss.avg
+            if math.isnan(train_loss) or train_loss > 1000:
+                msg = 'iteration %d - training exploded ...' % i
+                logging.error(msg)
+                raise TrainingBlowupError(msg)
+
             insert_log(it, 'train_loss', train_loss)
 
             if not math.isnan(grad[0]):
@@ -514,8 +549,6 @@ def train_cnn (train_loader,
             for i in range(it, it + num_acc):
                 if i % eval_every == 0 and not validated:
                     l, iou = validate(model, valid_loader, criterion, True)
-                    if math.isnan(l):
-                        raise ValueError('iteration %d - loss is nan - something went wrong ...' % i)
                     insert_log(i, 'valid_loss', l)
                     insert_log(i, 'valid_iou', iou)
                     validated = True
@@ -762,68 +795,84 @@ def main():
     logging.info('')
     logging.info('train set: %d; test set: %d' % (len(train_dset), len(valid_dset)))
 
-    LBFGS = 0
     for epoch in range(args.epochs):
-        # HACK
-        if 0 and global_state['it'] >= 200 and LBFGS == 0 and get_latest_log('valid_loss', float('nan'))[0] < 0.3:
-            LBFGS = 1
-            optimizer = optim.LBFGS(model.parameters(),
-                                    lr = 0.8,
-                                    max_iter = args.max_iter_lbfgs,
-                                    history_size = args.history_size,
-                                    tolerance_change = args.tolerance_change)
-            global_state['args'].grad_accum = 32
-            args.grad_accum = 32
-            global_state['args'].optim == 'lbfgs'
-            args.optim = 'lbfgs'
-            logging.info('changing optim to lbfgs')
+        try:
+            it, best_loss, best_it, epoch_loss, epoch_iou = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
+            save_checkpoint(
+                get_checkpoint_file(global_state['args'], global_state['it']),
+                model,
+                optimizer,
+                global_state)
 
-        it, best_loss, best_it, epoch_loss, epoch_iou = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
-        save_checkpoint(
-            get_checkpoint_file(global_state['args'], global_state['it']),
-            model,
-            optimizer,
-            global_state)
+            insert_log(global_state['it'], 'epoch_train_loss', epoch_loss)
+            insert_log(global_state['it'], 'train_iou', epoch_iou)
 
-        insert_log(global_state['it'], 'epoch_train_loss', epoch_loss)
-        insert_log(global_state['it'], 'train_iou', epoch_iou)
-
-        if global_state['args'].scheduler != 'none':
-            # note: different interface!
-            # ReduceLROnPlateau.step() takes metrics as argument,
-            # other schedulers take epoch number
-            if isinstance(scheduler, ReduceLROnPlateau2):
-                scheduler.step(epoch_loss, epoch)
-            else:
-                scheduler.step(epoch)
-
-            lr_new = get_learning_rate(optimizer)
-            lr_old = global_state['lr']
-            if lr_old!= lr_new:
-                if not args.switch_to_lbfgs:
-                    logging.info('[%d, %d]\tLR changed from %f to %f.' %
-                                 (epoch, global_state['it'], lr_old, lr_new))
-                    global_state['lr'] = lr_new
-                    insert_log(global_state['it'], 'lr', lr_new)
+            if global_state['args'].scheduler != 'none':
+                # note: different interface!
+                # ReduceLROnPlateau.step() takes metrics as argument,
+                # other schedulers take epoch number
+                if isinstance(scheduler, ReduceLROnPlateau2):
+                    scheduler.step(epoch_loss, epoch)
                 else:
-                    logging.info('[%d, %d]\tswitching to lbfgs' %
-                                 (epoch, global_state['it']))
-                    optimizer = optim.LBFGS(model.parameters(),
-                                            lr = 0.8,
-                                            max_iter = args.max_iter_lbfgs,
-                                            history_size = args.history_size,
-                                            tolerance_change = args.tolerance_change)
-                    global_state['args'].grad_accum = len(train_loader)
-                    args.grad_accum = len(train_loader)
-                    global_state['args'].optim == 'lbfgs'
-                    args.optim = 'lbfgs'
-                    global_state['args'].clip_gradient = 0
-                    args.clip_gradient = 0
-                    global_state['args'].scheduler = 'none'
-                    args.scheduler = 'none'
-                    insert_log(global_state['it'], 'lr', 0.8)
+                    scheduler.step(epoch)
 
-        logging.info('epoch best: it = %d, valid = %.5f' % (best_it, best_loss))
+                lr_new = get_learning_rate(optimizer)
+                lr_old = global_state['lr']
+                if lr_old!= lr_new:
+                    if not args.switch_to_lbfgs:
+                        logging.info('[%d, %d]\tLR changed from %f to %f.' %
+                                     (epoch, global_state['it'], lr_old, lr_new))
+                        global_state['lr'] = lr_new
+                        insert_log(global_state['it'], 'lr', lr_new)
+                    else:
+                        logging.info('[%d, %d]\tswitching to lbfgs' %
+                                     (epoch, global_state['it']))
+                        optimizer = optim.LBFGS(model.parameters(),
+                                                lr = 0.8,
+                                                max_iter = args.max_iter_lbfgs,
+                                                history_size = args.history_size,
+                                                tolerance_change = args.tolerance_change)
+                        global_state['args'].grad_accum = len(train_loader)
+                        args.grad_accum = len(train_loader)
+                        global_state['args'].optim == 'lbfgs'
+                        args.optim = 'lbfgs'
+                        global_state['args'].clip_gradient = 0
+                        args.clip_gradient = 0
+                        global_state['args'].scheduler = 'none'
+                        args.scheduler = 'none'
+                        insert_log(global_state['it'], 'lr', 0.8)
+
+            logging.info('epoch best: it = %d, valid = %.5f' % (best_it, best_loss))
+
+        except TrainingBlowupError:
+            # numerical instability, try to recover
+            # sometime lbfgs blows up, gradient clipping is not applicable
+            # restart with reduced learn rate
+            if isinstance(optimizer, optim.LBFGS):
+                ckpt = get_latest_checkpoint_file(args)
+                lr = global_state['lr'] / 2.0
+                load_checkpoint(ckpt,
+                                model,
+                                optimizer,
+                                global_state)
+                global_state['lr'] = lr
+                optimizer = optim.LBFGS(model.parameters(),
+                                        lr = lr,
+                                        max_iter = args.max_iter_lbfgs,
+                                        history_size = args.history_size,
+                                        tolerance_change = args.tolerance_change)
+                global_state['args'].grad_accum = len(train_loader)
+                args.grad_accum = len(train_loader)
+                global_state['args'].optim == 'lbfgs'
+                args.optim = 'lbfgs'
+                global_state['args'].clip_gradient = 0
+                args.clip_gradient = 0
+                global_state['args'].scheduler = 'none'
+                args.scheduler = 'none'
+                logging.error('recovered from checkpoint %s, lr = %f. keeping fingers crossed ...' % (ckpt, lr))
+            else:
+                logging.error('cannot recover ... terminating.')
+                raise
 
 
 if __name__ == '__main__':
