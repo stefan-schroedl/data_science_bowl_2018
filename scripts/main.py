@@ -836,7 +836,7 @@ def main():
                         args.grad_accum = len(train_loader)
                         global_state['args'].optim == 'lbfgs'
                         args.optim = 'lbfgs'
-                        global_state['args'].clip_gradient = 0
+                        global_state['args'].clip_gradient = 1e20
                         args.clip_gradient = 0
                         global_state['args'].scheduler = 'none'
                         args.scheduler = 'none'
@@ -865,7 +865,7 @@ def main():
                 args.grad_accum = len(train_loader)
                 global_state['args'].optim == 'lbfgs'
                 args.optim = 'lbfgs'
-                global_state['args'].clip_gradient = 0
+                global_state['args'].clip_gradient = 1e20
                 args.clip_gradient = 0
                 global_state['args'].scheduler = 'none'
                 args.scheduler = 'none'
