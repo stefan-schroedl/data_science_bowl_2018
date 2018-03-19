@@ -52,6 +52,7 @@ from post_process import parametric_pipeline
 import loss
 from loss import iou_metric, diagnose_errors, show_compare_gt, union_intersection, precision_at
 
+from meter import AverageMeter
 
 def get_checkpoint_file(args, it=0):
     if it > 0:
@@ -280,6 +281,18 @@ def validate_knn(model, loader, criterion):
     l = running_loss / cnt
     return l
 
+def iou_metric_tensor(pred, labels, thresh=0.0):
+
+    if pred.data.max() < thresh or pred.data.min() < thresh: # shortcut
+        return 0.0
+
+    pred_np = pred.data.numpy().squeeze()
+    labels_np = labels.numpy().squeeze()
+
+    img_th = (pred_np > thresh).astype(int)
+    img_l = scipy.ndimage.label(img_th)[0]
+    return iou_metric(l, img_l)
+
 def validate(model, loader, criterion, calc_iou=False):
     model.eval()
     running_loss = 0.0
@@ -288,27 +301,18 @@ def validate(model, loader, criterion, calc_iou=False):
 
     for i, (img, (labels, labels_seg)) in tqdm(enumerate(loader), desc='test', total=loader.__len__()):
         img, labels_seg = Variable(img), Variable(labels_seg)
-        outputs = model(img)
-        loss = criterion(outputs, labels_seg)
+        pred = model(img)
+        loss = criterion(pred, labels_seg)
         running_loss += loss.data[0]
         cnt = cnt + 1
 
         if calc_iou:
-            i = outputs.data.numpy().squeeze()
-            thresh = 0.0
-
-            if i.flatten().max() > thresh and i.flatten().min() < thresh: # shortcut
-
-                l = labels.numpy().squeeze()
-
-                img_th = (i > thresh).astype(int)
-                img_l = scipy.ndimage.label(img_th)[0]
-                iou = iou_metric(l, img_l)
-                sum_iou += iou
+            sum_iou += iou_metric_tensor(pred, labels)
 
     l = running_loss / cnt
     iou = sum_iou / cnt
     return l, iou
+
 
 def train_knn(
         train_loader,
@@ -381,7 +385,7 @@ def backprop_weight(labels, pred, global_state, thresh=0.1):
         w = 1.0
 
         denom = 1.0 * (tp + fp + fn)
-        
+
         if tp + fn == 0.0:
             w = 0.0
 
@@ -389,7 +393,7 @@ def backprop_weight(labels, pred, global_state, thresh=0.1):
             w = 1.0 / denom
 
     # normalize with running average
-    
+
     w_norm = w / (global_state['bp_wt_sum'] / global_state['bp_wt_cnt'])
 
     global_state['bp_wt_sum'] += w
@@ -424,17 +428,12 @@ def train_cnn (train_loader,
     # https://stackoverflow.com/questions/4851463/python-closure-write-to-variable-in-parent-scope
 
     acc = [] # train data buffer, needed for gradient accumulation with lbfgs
-    running_loss = [0.0]
-    running_cnt = [0]
-    final_loss = [0.0]
-    final_loss_cnt = [0]
     inner_cnt = [0]
-    weight_sum = [0.0]
-    weight_cnt = [0]
-
-    epoch_train_loss = 0
-    epoch_final_train_loss = 0
-    epoch_cnt = 0
+    running_loss = AverageMeter()
+    final_loss = AverageMeter()
+    weight_stats = AverageMeter()
+    iou_stats = AverageMeter()
+    loss_stats = AverageMeter()
 
     # helper function to do forward and accumulative backward passes on acc buffer
     def closure():
@@ -443,21 +442,21 @@ def train_cnn (train_loader,
         loss = 0
         for  (img, (labels, labels_seg)) in tqdm(acc, 'train'):
             img, labels_seg = Variable(img), Variable(labels_seg)
-            outputs = model(img)
+            pred = model(img)
             if global_state['args'].use_instance_weights > 0:
-                w = backprop_weight(labels.numpy().squeeze(), outputs.data[0].numpy().squeeze(), global_state)
-                weight_sum[0] += w
-                weight_cnt[0] += 1
+                w = backprop_weight(labels.numpy().squeeze(), pred.data[0].numpy().squeeze(), global_state)
+                weight_stats.update(w)
                 criterion.weight = torch.FloatTensor([w])
-                #criterion.weight = outputs.data.clone().fill_(w)
+                #criterion.weight = pred.data.clone().fill_(w)
 
-            loss = criterion(outputs, labels_seg)
-            final_loss[0] += loss.data[0]
-            final_loss_cnt[0] += 1
+            loss = criterion(pred, labels_seg)
+            final_loss.update(loss.data[0])
             if inner_cnt[0] == 0: # for lbfgs, only record the first eval!
-                running_loss[0] += loss.data[0]
-                running_cnt[0] += 1
+                running_loss.update(loss.data[0])
+                loss_stats.update(loss.data[0])
+                iou_stats.update(iou_metric_tensor(pred, labels))
             logging.debug('loss: %s', loss.data.numpy()[0])
+
             loss.backward()
 
         if global_state['args'].clip_gradient > 0:
@@ -473,13 +472,10 @@ def train_cnn (train_loader,
     while more_data:
 
         acc = []
-        running_loss = [0.0]
-        running_cnt = [0]
-        final_loss = [0.0]
-        final_loss_cnt = [0]
         inner_cnt = [0]
-        weight_sum = [0.0]
-        weight_cnt = [0]
+        running_loss.reset()
+        final_loss.reset()
+        weight_stats.reset()
         grad = [float('nan')]
         it = global_state['it']
 
@@ -491,7 +487,8 @@ def train_cnn (train_loader,
                 more_data = False
                 break
 
-        if len(acc) > 0:
+        num_acc = len(acc)
+        if num_acc > 0:
 
             if not is_lbfgs:
                 closure()
@@ -499,25 +496,22 @@ def train_cnn (train_loader,
             else:
                 optimizer.step(closure)
 
-            train_loss = running_loss[0] / running_cnt[0]
+            train_loss = running_loss.avg
             insert_log(it, 'train_loss', train_loss)
-
-            epoch_train_loss += running_loss[0]
-            epoch_cnt += len(acc)
 
             if not math.isnan(grad[0]):
                 insert_log(it, 'grad', grad[0])
 
-            if weight_cnt[0] > 0:
-                insert_log(it, 'bp_wt', weight_sum[0]/weight_cnt[0])
+            if global_state['args'].use_instance_weights > 0:
+                insert_log(it, 'bp_wt', weight_stats.avg)
 
             if is_lbfgs:
-                final_train_loss = final_loss[0] / final_loss_cnt[0]
+                final_train_loss = final_loss.avg
                 logging.debug('final loss: %f', final_train_loss)
                 insert_log(it, 'final_train_loss', final_train_loss)
 
             validated = False
-            for i in range(it, it + len(acc)):
+            for i in range(it, it + num_acc):
                 if i % eval_every == 0 and not validated:
                     l, iou = validate(model, valid_loader, criterion, True)
                     if math.isnan(l):
@@ -548,9 +542,9 @@ def train_cnn (train_loader,
                         global_state,
                         is_best)
 
-            global_state['it'] += len(acc)
+            global_state['it'] += num_acc
 
-    return global_state['it'], global_state['best_loss'], global_state['best_it'], epoch_train_loss / epoch_cnt
+    return global_state['it'], global_state['best_loss'], global_state['best_it'], loss_stats.avg, iou_stats.avg
 
 
 def baseline(
@@ -572,12 +566,12 @@ def baseline(
 
     cnt = 0
     for i, (img, (labels,labels_seg)) in enumerate(valid_loader):
-        outputs = labels_seg.clone()
-        outputs = torch.clamp(outputs, m, m)
+        pred = labels_seg.clone()
+        pred = torch.clamp(pred, m, m)
         img, labels = Variable(img), Variable(labels_seg)
-        outputs = Variable(outputs)
+        pred = Variable(pred)
 
-        loss = criterion(outputs, labels_seg)
+        loss = criterion(pred, labels_seg)
 
         running_loss += loss.data[0]
         cnt += 1
@@ -742,8 +736,8 @@ def main():
     train_dset, valid_dset = dset.train_test_split(test_size=args.valid_fraction, random_state=1, shuffle=True, stratify=stratify)
     train_loader = DataLoader(train_dset, batch_size=1, shuffle=True)
     # HACK
-    #valid_loader = DataLoader(valid_dset, batch_size=1, shuffle=True)
-    valid_loader = DataLoader(train_dset, batch_size=1, shuffle=True)
+    valid_loader = DataLoader(valid_dset, batch_size=1, shuffle=True)
+    #valid_loader = DataLoader(train_dset, batch_size=1, shuffle=True)
 
     if args.calc_iou > 0:
         compute_iou(model, train_loader)
@@ -784,7 +778,7 @@ def main():
             args.optim = 'lbfgs'
             logging.info('changing optim to lbfgs')
 
-        it, best_loss, best_it, epoch_loss = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
+        it, best_loss, best_it, epoch_loss, epoch_iou = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
         save_checkpoint(
             get_checkpoint_file(global_state['args'], global_state['it']),
             model,
@@ -792,6 +786,7 @@ def main():
             global_state)
 
         insert_log(global_state['it'], 'epoch_train_loss', epoch_loss)
+        insert_log(global_state['it'], 'train_iou', epoch_iou)
 
         if global_state['args'].scheduler != 'none':
             # note: different interface!
