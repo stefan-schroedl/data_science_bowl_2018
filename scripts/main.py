@@ -846,7 +846,7 @@ def main():
                 lr_new = get_learning_rate(optimizer)
                 lr_old = global_state['lr']
                 if lr_old != lr_new:
-                    if not args.switch_to_lbfgs:
+                    if not args.switch_to_lbfgs or isinstance(optimizer, optim.LBFGS):
                         logging.info('[%d, %d]\tLR changed from %f to %f.' %
                                      (epoch, global_state['it'], lr_old, lr_new))
                         global_state['lr'] = lr_new
