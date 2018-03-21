@@ -12,9 +12,9 @@ class ReduceLROnPlateau2(object):
     of epochs, the learning rate is reduced.
 
     This class is a variation of torch.optim.lr_scheduler.ReduceLROnPlateau.
-    The difference is to wait with the learn rate reduction until the 
+    The difference is to wait with the learn rate reduction until the
     deterioration is again smaller than patience_threshold times the maximum
-    deterioration since the last optimum. Error sometimes tends to oscillate 
+    deterioration since the last optimum. Error sometimes tends to oscillate
     between large deviations and some close to the original best one.
 
     Args:
@@ -94,7 +94,13 @@ class ReduceLROnPlateau2(object):
         self.is_acceptable_degradation = None
         self.eps = eps
         self.last_epoch = -1
+        # important difference to ReduceLROnPlateau:
+        # wait until error oscillates back towards optimum before reducing the learning rate
+        self.last = None
         self.waiting_to_reduce = False
+        # important difference to ReduceLROnPlateau:
+        # while the error is going down immediately after reduction, don't start cooldown yet!
+        self.waiting_for_deterioration = False
         self._init_is_better(mode=mode, threshold=threshold,
                              threshold_mode=threshold_mode, patience_threshold=patience_threshold)
         self._reset()
@@ -105,6 +111,8 @@ class ReduceLROnPlateau2(object):
         self.worst_after_best = - self.mode_worse
         self.cooldown_counter = 0
         self.num_bad_epochs = 0
+        self.waiting_to_reduce = False
+        self.waiting_for_deterioration = False
 
     def step(self, metrics, epoch=None):
         current = metrics
@@ -113,8 +121,8 @@ class ReduceLROnPlateau2(object):
         self.last_epoch = epoch
 
         if self.verbose:
-            logging.debug('scheduler: epoch = %d, num_bad_epochs = %d, current = %.4f, best = %.4f, worst_after_best=%.4f, cooldown = %s, waiting_to_reduce = %s' % (epoch, self.num_bad_epochs, current, self.best, self.worst_after_best, self.in_cooldown, self.waiting_to_reduce))
-            
+            logging.debug('scheduler: epoch = %d, num_bad_epochs = %d, current = %.4f, best = %.4f, worst_after_best=%.4f, cooldown = %s, waiting_to_reduce = %s, waiting_for_deterioration = %s' % (epoch, self.num_bad_epochs, current, self.best, self.worst_after_best, self.in_cooldown, self.waiting_to_reduce, self.waiting_for_deterioration))
+
         if not self.waiting_to_reduce and self.is_better(current, self.best):
             self.best = current
             self.num_bad_epochs = 0
@@ -126,10 +134,17 @@ class ReduceLROnPlateau2(object):
             else:
                 self.worst_after_best = min(self.worst_after_best, current)
 
-        if self.in_cooldown:
-            self.cooldown_counter -= 1
+        is_not_improving = self.last is None or self.last == current or self.is_better(self.last, current)
+        if is_not_improving:
+            self.waiting_for_deterioration = False
+        self.last = current
+
+        if self.in_cooldown or self.waiting_for_deterioration:
             self.num_bad_epochs = 0  # ignore any bad epochs in cooldown
             self.worst_after_best = self.best
+
+        if self.in_cooldown and not self.waiting_for_deterioration:
+            self.cooldown_counter -= 1
 
         if not self.waiting_to_reduce and self.num_bad_epochs > self.patience:
             self.waiting_to_reduce = True
@@ -142,6 +157,7 @@ class ReduceLROnPlateau2(object):
                 self.num_bad_epochs = 0
                 self.worst_after_best = self.best
                 self.waiting_to_reduce = False
+                self.waiting_for_deterioration = True
 
     def _reduce_lr(self, epoch):
         for i, param_group in enumerate(self.optimizer.param_groups):

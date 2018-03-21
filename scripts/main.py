@@ -79,7 +79,6 @@ def get_latest_checkpoint_file(args):
         for file in files:
             m = pattern.match(file)
             if m:
-                print file
                 it = int(m.group(1))
                 if it > last_it:
                     last_it = it
@@ -405,7 +404,7 @@ def compute_iou(model, loader):
     msg = 'iou: mean = %.5f, med = %.5f' % (np.mean(ious), np. median(ious))
     logging.info(msg)
     print msg
-    
+
 
 def backprop_weight(labels, pred, global_state, thresh=0.1):
 
@@ -810,17 +809,20 @@ def main():
     logging.info('')
     logging.info('train set: %d; test set: %d' % (len(train_dset), len(valid_dset)))
 
+    recovered_ckpt = None
+    recovery_attempts = 0
+
     for epoch in range(args.epochs):
         try:
             it, best_loss, best_it, epoch_loss, epoch_iou = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
 
             logging.info('[%d, %d]\ttrain loss in epoch: %.3f, iou=%.3f' %
                          (epoch, global_state['it'], epoch_loss, epoch_iou))
- 
+
 
             # check for blowup
             last_epoch_loss = get_latest_log('epoch_train_loss', 1e20)[0]
-            if not math.isnan(last_epoch_loss) and epoch_loss > 10.0 * last_epoch_loss:
+            if not math.isnan(last_epoch_loss) and epoch_loss > 100.0 * last_epoch_loss:
                 msg = 'iteration %d - training blew up ...' % it
                 logging.error(msg)
                 raise TrainingBlowupError(msg)
@@ -886,7 +888,19 @@ def main():
             # restart with reduced learn rate
             if isinstance(optimizer, optim.LBFGS):
                 ckpt = get_latest_checkpoint_file(args)
-                lr = global_state['lr'] / 2.0
+                if recovered_ckpt == ckpt:
+                    # have tried previously the same checkpoint, reduce lr
+                    recovery_attempts += 1
+                else:
+                    recovery_attempts = 1
+                recovered_ckpt = ckpt
+
+                min_lr = 0.1
+                lr = max(global_state['lr'] * .5, min_lr)
+                if lr >= global_state['lr']:
+                    msg = 'attempt %d: using lbfgs and lr (%f) already at min_lr (%f), giving up' % (recovery_attempts, global_state['lr'], min_lr)
+                    logging.error(msg)
+                    raise
                 load_checkpoint(ckpt,
                                 model,
                                 optimizer,
@@ -912,7 +926,7 @@ def main():
                                                patience_threshold=0.1,
                                                min_lr=0.1, verbose=1)
 
-                logging.error('recovered from checkpoint %s, lr = %f. keeping fingers crossed ...' % (ckpt, lr))
+                logging.error('recovered from checkpoint %s (attempt %d), lr = %f. keeping fingers crossed ...' % (ckpt, recovery_attempts, lr))
             else:
                 logging.error('cannot recover ... terminating.')
                 raise
