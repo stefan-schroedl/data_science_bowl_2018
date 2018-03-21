@@ -42,7 +42,7 @@ from adjust_learn_rate import get_learning_rate, adjust_learning_rate
 from KNN import *
 
 import nuc_trans
-from nuc_trans import random_rotate90_transform2
+from nuc_trans import random_rotate90_transform2, as_segmentation, segment_separate_touching_nuclei
 import dataset
 from dataset import NucleusDataset
 
@@ -144,7 +144,7 @@ parser.add('--stage', '-s', default='stage1',
 #                                        help='model architecture: ' +
 #                                            ' | '.join(model_names) +
 #                                            ' (default: resnet18)')
-parser.add('-j', '--workers', default=4, type=int, metavar='N',
+parser.add('-j', '--workers', default=1, type=int, metavar='N',
            help='number of data loading workers [default: %(default)s]')
 parser.add('--epochs', default=1, type=int, metavar='N',
            help='number of total epochs to run [default: %(default)s]')
@@ -768,7 +768,7 @@ def main():
     logging.info('loading data')
 
     def load_data():
-        return NucleusDataset(args.data, stage_name=args.stage, transform=train_transform)
+        return NucleusDataset(args.data, stage_name=args.stage, preprocess=as_segmentation, transform=train_transform)
     timer = timeit.Timer(load_data)
     t,dset = timer.timeit(number=1)
     logging.info('load time: %.1f\n' % t)
@@ -832,6 +832,7 @@ def main():
 
             insert_log(global_state['it'], 'epoch_train_loss', epoch_loss)
             insert_log(global_state['it'], 'train_iou', epoch_iou)
+            insert_log(global_state['it'], 'lr', global_state['lr'])
 
             if global_state['args'].scheduler != 'none':
                 # note: different interface!
@@ -849,7 +850,6 @@ def main():
                         logging.info('[%d, %d]\tLR changed from %f to %f.' %
                                      (epoch, global_state['it'], lr_old, lr_new))
                         global_state['lr'] = lr_new
-                        insert_log(global_state['it'], 'lr', lr_new)
                     else:
                         logging.info('[%d, %d]\tswitching to lbfgs' %
                                      (epoch, global_state['it']))
@@ -868,14 +868,12 @@ def main():
                         global_state['args'].scheduler = 'plateau'
                         args.scheduler = 'plateau'
                         global_state['lr'] = lr
-                        insert_log(global_state['it'], 'lr', lr)
 
                         scheduler = ReduceLROnPlateau2(optimizer,
                                                        factor=0.9,
                                                        patience=1,
                                                        patience_threshold=0.1,
                                                        min_lr=0.1, verbose=1)
-
 
             logging.info('epoch best: it = %d, valid = %.5f' % (best_it, best_loss))
 

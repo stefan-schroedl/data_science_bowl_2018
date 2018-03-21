@@ -19,9 +19,9 @@ def init_weights(net, method='kaiming'):
                 init.xavier_uniform(m.weight)
             if m.bias is not None:
                 init.constant(m.bias, 0)
-        elif classname.find('BatchNorm') != -1:
-            m.weight.data.normal_(1.0, 0.02)
-            m.bias.data.fill_(0)
+            elif classname.find('BatchNorm') != -1 and m.weight and m.weight.data:
+                m.weight.data.normal_(1.0, 0.02)
+                m.bias.data.fill_(0)
         elif isinstance(m, nn.Linear):
             init.normal(m.weight, std=1e-3)
             if m.bias is not None:
@@ -97,30 +97,30 @@ class CNN(nn.Module):
             nn.Conv2d(3, 3, stride=1, kernel_size=1, padding=0))
 
         self.layer1 = nn.Sequential(
+            nn.BatchNorm2d(15, affine=False),
             nn.Conv2d(15, 16, stride=1, kernel_size=3, padding=1),
-            #nn.BatchNorm2d(16),
             nn.ReLU(),
             nn.MaxPool2d(3, stride=1, padding=1))
         self.layer2 = nn.Sequential(
+            nn.BatchNorm2d(16, affine=False),
             nn.Conv2d(16, 16, stride=1, kernel_size=3, padding=1),
-            #nn.BatchNorm2d(16),
             nn.ReLU(),
             nn.MaxPool2d(3, stride=1, padding=1))
         self.layer3 = nn.Sequential(
+            nn.BatchNorm2d(16, affine=False),
             nn.Conv2d(16, 16, stride=1, kernel_size=3, padding=1),
-            #nn.BatchNorm2d(16),
             nn.ReLU())
         self.layer4 = nn.Sequential(
+            nn.BatchNorm2d(16, affine=False),
             nn.Conv2d(16, 16, stride=1, kernel_size=3, padding=1),
-            #nn.BatchNorm2d(16),
             nn.ReLU())
         self.layer5 = nn.Sequential(
+            nn.BatchNorm2d(16, affine=False),
             nn.Conv2d(16, 16, stride=1, kernel_size=3, padding=1),
-            #nn.BatchNorm2d(16),
             nn.ReLU())
         self.layer6 = nn.Sequential(
+            nn.BatchNorm2d(16, affine=False),
             nn.Conv2d(16, 16, stride=1, kernel_size=3, padding=1),
-            #nn.BatchNorm2d(16),
             nn.ReLU())
 
         self.layer7 = nn.Sequential(
