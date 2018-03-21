@@ -41,8 +41,8 @@ from adjust_learn_rate import get_learning_rate, adjust_learning_rate
 
 from KNN import *
 
-import transform
-from transform import random_rotate90_transform2
+import nuc_trans
+from nuc_trans import random_rotate90_transform2
 import dataset
 from dataset import NucleusDataset
 
@@ -768,7 +768,7 @@ def main():
     logging.info('loading data')
 
     def load_data():
-        return NucleusDataset(args.data, args.stage, transform=train_transform)
+        return NucleusDataset(args.data, stage_name=args.stage, transform=train_transform)
     timer = timeit.Timer(load_data)
     t,dset = timer.timeit(number=1)
     logging.info('load time: %.1f\n' % t)
@@ -782,9 +782,7 @@ def main():
         stratify = dset.data_df['images'].map(lambda x: '{}'.format(x.size))
     train_dset, valid_dset = dset.train_test_split(test_size=args.valid_fraction, random_state=1, shuffle=True, stratify=stratify)
     train_loader = DataLoader(train_dset, batch_size=1, shuffle=True)
-    # HACK
     valid_loader = DataLoader(valid_dset, batch_size=1, shuffle=True)
-    #valid_loader = DataLoader(train_dset, batch_size=1, shuffle=True)
 
     if args.calc_iou > 0:
         compute_iou(model, train_loader)
@@ -793,7 +791,6 @@ def main():
     if args.evaluate:
         validate(model, valid_loader, criterion)
         return
-
 
     #l, iou = validate(model, valid_loader, criterion, True)
     #logging.info('initial validation: %.3f %.3f\n' % (l, iou))

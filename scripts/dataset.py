@@ -31,6 +31,8 @@ import cv2
 
 import tqdm
 
+from nuc_trans import as_segmentation, segment_separate_touching_nuclei
+
 class NucleusDataset(Dataset):
     """Nucleus dataset."""
 
@@ -50,10 +52,6 @@ class NucleusDataset(Dataset):
         return np.array(img.convert('RGB')), img.size
 
     @staticmethod
-    def as_segmentation(img):
-        return (img>0).astype(int)
-
-    @staticmethod
     def is_inverted(img, invert_thresh_pd=10.0):
         img_grey = img_as_ubyte(rgb2grey(img))
         img_th = cv2.threshold(img_grey,0,255,cv2.THRESH_OTSU)[1]
@@ -64,6 +62,7 @@ class NucleusDataset(Dataset):
             root_dir=None,
             stage_name='stage1',
             group_name='train',
+            preprocess=segment_separate_touching_nuclei,
             transform=None):
         """
         Args:
@@ -124,12 +123,12 @@ class NucleusDataset(Dataset):
         ret = data_df['images'].map(self.read_image)
         #(data_df['images'], data_df['format'], data_df['mode'], data_df['size']) = ([x[i] for x in ret] for i in range(4))
         (data_df['images'], data_df['size']) = ([x[i] for x in ret] for i in range(2))
-    
+
         data_df['masks'] = data_df['masks'].map(
             self.read_and_stack).map(
             lambda x: x.astype(np.uint8))
 
-        data_df['masks_seg'] = data_df['masks'].map(self.as_segmentation)
+        data_df['masks_seg'] = data_df['masks'].map(preprocess)
         data_df['inv'] = data_df['images'].map(self.is_inverted)
 
         self.data_df = data_df
@@ -138,7 +137,7 @@ class NucleusDataset(Dataset):
     def __len__(self):
         return self.data_df.shape[0]
 
-    
+
     def __getitem__(self, idx):
 
         sample = self.data_df["images"].iloc[idx]
@@ -147,8 +146,8 @@ class NucleusDataset(Dataset):
         if self.transform:
             sample, masks, masks_seg = self.transform(sample, masks, masks_seg)
         return sample, (masks, masks_seg)
-    
-    
+
+
     def train_test_split(self, **options):
         """ Return a list of splitted indices from a DataSet.
         Indices can be used with DataLoader to build a train and validation set.
@@ -159,7 +158,7 @@ class NucleusDataset(Dataset):
             Shuffling True or False
             Random seed
         """
-   
+
         df_train, df_test = train_test_split_sk(self.data_df, **options)
         dset_train = NucleusDataset(transform=self.transform)
         dset_train.data_df = df_train

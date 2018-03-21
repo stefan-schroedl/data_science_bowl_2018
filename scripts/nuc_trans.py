@@ -49,6 +49,22 @@ import skimage.color
 import skimage.morphology
 from scipy import ndimage
 
+# preprocessing
+def as_segmentation(img):
+        return (img>0).astype(int)
+
+def segment_separate_touching_nuclei(labeled_mask, sz=2):
+    struc = skimage.morphology.disk(sz)
+
+    img_sum = np.zeros(labeled_mask.shape)
+    for j in range(1, labeled_mask.max()+1):
+        m = (labeled_mask == j).astype(int)
+        m = skimage.morphology.binary_dilation(m, struc)
+        img_sum += m
+    ov = np.maximum(0, img_sum - 1)
+
+    mask_corrected = np.logical_and(labeled_mask > 0, ov == 0).astype(int)
+    return mask_corrected #, ov
 
 ## for debug
 def dummy_transform(image):
