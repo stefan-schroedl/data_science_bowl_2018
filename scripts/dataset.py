@@ -124,11 +124,15 @@ class NucleusDataset(Dataset):
         #(data_df['images'], data_df['format'], data_df['mode'], data_df['size']) = ([x[i] for x in ret] for i in range(4))
         (data_df['images'], data_df['size']) = ([x[i] for x in ret] for i in range(2))
 
-        data_df['masks'] = data_df['masks'].map(
-            self.read_and_stack).map(
-            lambda x: x.astype(np.uint8))
+        if np.any([len(x) > 0 for x in data_df['masks']]):
+            data_df['masks'] = data_df['masks'].map(
+                self.read_and_stack).map(
+                    lambda x: x.astype(np.uint8))
+            data_df['masks_seg'] = data_df['masks'].map(preprocess)
+        else:
+            data_df['masks'] = data_df['images'].map(lambda x: np.zeros(x.shape))
+            data_df['masks_seg'] = data_df['masks']
 
-        data_df['masks_seg'] = data_df['masks'].map(preprocess)
         data_df['inv'] = data_df['images'].map(self.is_inverted)
 
         self.data_df = data_df

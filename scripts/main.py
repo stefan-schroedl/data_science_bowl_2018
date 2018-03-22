@@ -17,7 +17,7 @@ from tqdm import tqdm
 
 import numpy as np
 import matplotlib.pyplot as plt
-
+import pandas as pd
 import scipy
 
 import torch
@@ -36,7 +36,7 @@ import cv2
 from sklearn.neighbors import KNeighborsClassifier
 
 import utils
-from utils import mkdir_p, csv_list, int_list, strip_end, init_logging, get_log, set_log, clear_log, insert_log, get_latest_log, get_history_log
+from utils import mkdir_p, csv_list, int_list, strip_end, init_logging, get_log, set_log, clear_log, insert_log, get_latest_log, get_history_log, prob_to_rles
 from adjust_learn_rate import get_learning_rate, adjust_learning_rate
 
 from KNN import *
@@ -139,6 +139,8 @@ parser.add('--experiment', '-e', required=True, help='experiment name')
 parser.add('--out-dir', '-o', help='output directory')
 parser.add('--stage', '-s', default='stage1',
            help='stage [default: %(default)s]')
+parser.add('--group', '-g', default='train',
+           help='group name [default: %(default)s]')
 #parser.add('--arch', '-a', metavar='ARCH', default='resnet18',
 #                                        choices=model_names,
 #                                        help='model architecture: ' +
@@ -204,6 +206,8 @@ parser.add('--override-model-opts', type=csv_list, default='override-model-opts,
 parser.add('--evaluate', '-E', dest='evaluate', action='store_true',
            help='evaluate model on validation set')
 parser.add('--calc-iou', type=int, default=0, help='calculate iou and exit')
+parser.add('--calc-pred', type=int, default=0, help='calculate predictions and exit')
+parser.add('--predictions-file', type=str, default='predictions.csv', help='file name for predictions output')
 parser.add('--random-seed', type=int, default=2018, help='set random number generator seed [default: %(default)s]')
 parser.add('--verbose', '-V', type=int, default=0, help='verbose logging')
 parser.add('--force-overwrite', type=int, default=0, help='overwrite existing checkpoint, if it exists')
@@ -219,6 +223,7 @@ def save_checkpoint(fname,
     o_state_dict = optimizer.state_dict()
 
     s = {'model_state_dict': model.state_dict(),
+         'model': model,
          'log': get_log()}
 
     if global_state:
@@ -250,6 +255,10 @@ def load_checkpoint(fname,
 
     if model:
         model.load_state_dict(checkpoint['model_state_dict'])
+
+    old_model = None
+    if 'model' in checkpoint:
+        old_model = checkpoint['model']
 
     if optimizer and (not global_state['args'] or not('optim' in global_state['args'].override_model_opts)):
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -288,6 +297,8 @@ def load_checkpoint(fname,
     logging.info(
         "=> loaded checkpoint '{}' (iteration {})\n".format(
             fname, it))
+    return old_model
+
 
 def torch_to_numpy(t):
     return (t.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
@@ -768,7 +779,7 @@ def main():
     logging.info('loading data')
 
     def load_data():
-        return NucleusDataset(args.data, stage_name=args.stage, preprocess=as_segmentation, transform=train_transform)
+        return NucleusDataset(args.data, stage_name=args.stage, group_name=args.group, preprocess=segment_separate_touching_nuclei, transform=train_transform)
     timer = timeit.Timer(load_data)
     t,dset = timer.timeit(number=1)
     logging.info('load time: %.1f\n' % t)
@@ -787,6 +798,30 @@ def main():
     if args.calc_iou > 0:
         compute_iou(model, train_loader)
         return
+
+    if args.calc_pred > 0:
+        # calculate predictions
+        preds = []
+        for i in tqdm(range(len(dset.data_df))):
+            img, (mask, mask_seg) = dset[i]
+            pred = model(Variable(img.unsqueeze(0),requires_grad=False)).data.numpy().squeeze()
+            preds.append(pred)
+        dset.data_df['pred'] = preds
+
+        dset.data_df['rles'] = dset.data_df['pred'].map(lambda x: list(prob_to_rles(x)))
+
+        out_pred_list = []
+        for _, c_row in tqdm(dset.data_df.iterrows()):
+            for c_rle in c_row['rles']:
+                out_pred_list.append({'ImageId': c_row['id'],
+                                     'EncodedPixels': ' '.join(np.array(c_rle).astype(str))})
+
+        out_pred_df = pd.DataFrame(out_pred_list)
+        logging.info('%d regions found for %d images' %(out_pred_df.shape[0], dset.data_df.shape[0]))
+        out_pred_df[['ImageId', 'EncodedPixels']].to_csv(args.predictions_file, index = False)
+
+        return
+
 
     if args.evaluate:
         validate(model, valid_loader, criterion)
