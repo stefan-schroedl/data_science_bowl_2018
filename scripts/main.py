@@ -44,7 +44,7 @@ from adjust_learn_rate import get_learning_rate, adjust_learning_rate
 from KNN import *
 
 import nuc_trans
-from nuc_trans import random_rotate90_transform2, as_segmentation, segment_separate_touching_nuclei
+from nuc_trans import random_rotate90_transform2, as_segmentation, separate_touching_nuclei
 import dataset
 from dataset import NucleusDataset
 
@@ -322,6 +322,7 @@ def validate_knn(model, loader, criterion):
     l = running_loss / cnt
     return l
 
+
 def iou_metric_tensor(labels, pred, thresh=0.0):
 
     if pred.data.max() < thresh or pred.data.min() > thresh: # shortcut
@@ -332,24 +333,41 @@ def iou_metric_tensor(labels, pred, thresh=0.0):
 
     img_th = (pred_np > thresh).astype(int)
     img_l = scipy.ndimage.label(img_th)[0]
+
     return iou_metric(labels_np, img_l)
+
 
 def validate(model, loader, criterion, calc_iou=False):
     #model.eval()
     model.train() # for some reason, batch norm doesn't work properly with eval mode!!!
+
+    if isinstance(criterion, nn.BCEWithLogitsLoss):
+        criterion.weight = torch.ones(1) # reset weight if it was changed!
     running_loss = 0.0
     cnt = 0
     sum_iou = 0.0
 
-    for i, (img, (labels, labels_seg)) in tqdm(enumerate(loader), desc='test', total=loader.__len__()):
-        img, labels_seg = Variable(img), Variable(labels_seg)
+    for i, row in tqdm(enumerate(loader), desc='test', total=loader.__len__()):
+
+        img, labels_seg = Variable(row['images']), Variable(row['masks_seg'])
         pred = model(img)
+        pred_lab = pred
+
+        # HACK for upper bound/sanity check
+        #pred = row['masks_seg']
+        #pred_lab = Variable(scipy.ndimage.label(row['masks_seg'])[0], requires_grad=False)
+        #pred_lab = Variable(row['masks_prep'], requires_grad=False)
+        # hmmm ... loss can actually become negative if too good??? numerical problem???
+        #pred[pred<=0] = -0.693
+        #pred[pred>0] = 0.693
+        #pred = Variable(pred, requires_grad=False)
+
         loss = criterion(pred, labels_seg)
         running_loss += loss.data[0]
         cnt = cnt + 1
 
         if calc_iou:
-            sum_iou += iou_metric_tensor(labels, pred)
+            sum_iou += iou_metric_tensor(row['masks'], pred_lab)
 
     l = running_loss / cnt
     iou = sum_iou / cnt
@@ -393,28 +411,6 @@ def train_knn(
                     global_state['best_it'] = global_state['it']
                     is_best = True
     return global_state['it'], global_state['best_loss'], global_state['best_it']
-
-
-def compute_iou0(model, loader):
-    model.eval()
-    pred = [(model(Variable(img,requires_grad=False)).data.numpy().squeeze(), mask.numpy().squeeze()) for img, (mask,mask_seg) in tqdm(iter(loader))]
-    #img_th = [(parametric_pipeline(img, circle_size=4), mask) for img, mask in pred]
-    thresh = 0.0
-    img_th = [(x > thresh).astype(int) for x,_ in pred]
-    img_l = [scipy.ndimage.label(x)[0] for x in img_th]
-    ious = [iou_metric(m[1],i) for (i,m) in zip(img_l,pred)]
-    msg = 'iou: mean = %.5f, med = %.5f' % (np.mean(ious), np. median(ious))
-    logging.info(msg)
-    print msg
-
-
-def compute_iou(model, loader):
-    model.eval()
-    pred = [(model(Variable(img,requires_grad=False)), mask) for img, (mask,mask_seg) in tqdm(iter(loader))]
-    ious = [iou_metric_tensor(m, i) for (i,m) in pred]
-    msg = 'iou: mean = %.5f, med = %.5f' % (np.mean(ious), np. median(ious))
-    logging.info(msg)
-    print msg
 
 
 def backprop_weight(labels, pred, global_state, thresh=0.1):
@@ -491,11 +487,11 @@ def train_cnn (train_loader,
         optimizer.zero_grad()
         logging.debug('start inner %d' % inner_cnt[0])
         loss = 0
-        for  (img, (labels, labels_seg)) in tqdm(acc, 'train'):
-            img, labels_seg = Variable(img), Variable(labels_seg)
+        for  row in tqdm(acc, 'train'):
+            img, labels_seg = Variable(row['images']), Variable(row['masks_prep_seg'])
             pred = model(img)
             if global_state['args'].use_instance_weights > 0:
-                w = backprop_weight(labels.numpy().squeeze(), pred.data[0].numpy().squeeze(), global_state)
+                w = backprop_weight(row['masks_prep'].numpy().squeeze(), pred.data[0].numpy().squeeze(), global_state)
                 weight_stats.update(w)
                 criterion.weight = torch.FloatTensor([w])
                 #criterion.weight = pred.data.clone().fill_(w)
@@ -505,7 +501,7 @@ def train_cnn (train_loader,
             if inner_cnt[0] == 0: # for lbfgs, only record the first eval!
                 running_loss.update(loss.data[0])
                 loss_stats.update(loss.data[0])
-                iou_stats.update(iou_metric_tensor(labels, pred))
+                iou_stats.update(iou_metric_tensor(row['masks'], pred))
             logging.debug('loss: %s', loss.data.numpy()[0])
 
             loss.backward()
@@ -638,18 +634,28 @@ def baseline(
 #Note: for image and mask, there is no compatible solution that can use transforms.Compse(), see https://github.com/pytorch/vision/issues/9
 #transformations = transforms.Compose([random_rotate90_transform2(),transforms.ToTensor(),])
 
-def train_transform(img, mask, mask_seg, augment=True):
+def train_transform(img, mask, mask_seg, mask_prep, mask_prep_seg, augment=True):
     # HACK (make dims consistent, first one is channels)
     if len(mask.shape) == 2:
         mask = np.expand_dims(mask, 2)
     if len(mask_seg.shape) == 2:
         mask_seg = np.expand_dims(mask_seg, 2)
+
+    if len(mask_prep.shape) == 2:
+        mask_prep = np.expand_dims(mask_prep, 2)
+    if len(mask_prep_seg.shape) == 2:
+        mask_prep_seg = np.expand_dims(mask_prep_seg, 2)
+
     if augment:
-        img, mask, mask_seg = random_rotate90_transform2(img, mask, mask_seg)
+        img, mask, mask_seg, mask_prep, mask_prep_seg = random_rotate90_transform2(img, mask, mask_seg, mask_prep, mask_prep_seg)
     img = ToTensor()(img)
     mask = torch.from_numpy(np.transpose(mask, (2, 0, 1))).float()
     mask_seg = torch.from_numpy(np.transpose(mask_seg, (2, 0, 1))).float()
-    return img, mask, mask_seg
+
+    mask_prep = torch.from_numpy(np.transpose(mask_prep, (2, 0, 1))).float()
+    mask_prep_seg = torch.from_numpy(np.transpose(mask_prep_seg, (2, 0, 1))).float()
+
+    return img, mask, mask_seg, mask_prep, mask_prep_seg
 
 
 def main():
@@ -777,14 +783,12 @@ def main():
         clear_log()
 
     # Data loading
-    logging.info('loading data')
-
     def load_data():
-        return NucleusDataset(args.data, stage_name=args.stage, group_name=args.group, preprocess=segment_separate_touching_nuclei, transform=train_transform)
+        return NucleusDataset(args.data, stage_name=args.stage, group_name=args.group, preprocess=separate_touching_nuclei, transform=train_transform)
+        #return NucleusDataset(args.data, stage_name=args.stage, group_name=args.group, preprocess=lambda x: return x, transform=train_transform)
     timer = timeit.Timer(load_data)
     t,dset = timer.timeit(number=1)
     logging.info('load time: %.1f\n' % t)
-
 
     # hack: this image format (1388, 1040) occurs only ones, stratify complains ..
     dset.data_df = dset.data_df[dset.data_df['size'] != (1388, 1040)]
@@ -797,7 +801,10 @@ def main():
     valid_loader = DataLoader(valid_dset, batch_size=1, shuffle=True)
 
     if args.calc_iou > 0:
-        compute_iou(model, train_loader)
+        loss, iou = validate(model, train_loader, criterion, calc_iou=True)
+        msg = 'loss = %f, iou = %f' % (loss, iou)
+        logging.info(msg)
+        print msg
         return
 
     if args.calc_pred > 0:

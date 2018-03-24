@@ -9,7 +9,7 @@ import sys
 import random
 import math
 from functools import reduce
-
+import logging
 from glob import glob
 
 from torchvision import transforms, utils
@@ -27,11 +27,13 @@ from skimage.color import rgb2grey
 import sklearn
 from sklearn.model_selection import train_test_split as train_test_split_sk
 
+import scipy
+
 import cv2
 
-import tqdm
+from tqdm import tqdm
 
-from nuc_trans import as_segmentation, segment_separate_touching_nuclei
+from nuc_trans import as_segmentation, separate_touching_nuclei
 
 class NucleusDataset(Dataset):
     """Nucleus dataset."""
@@ -63,10 +65,10 @@ class NucleusDataset(Dataset):
     def __init__(
             self,
             root_dir=None,
-            stage_name='stage1',
-            group_name='train',
-            preprocess=segment_separate_touching_nuclei,
-            transform=None):
+            stage_name= 'stage1',
+            group_name= 'train',
+            preprocess = separate_touching_nuclei,
+            transform = None):
         """
         Args:
             root_dir (string): Directory with all the images.
@@ -123,23 +125,42 @@ class NucleusDataset(Dataset):
 
         data_df = pd.DataFrame(data_rows)
 
+        logging.debug('reading images')
         ret = data_df['images'].map(self.read_image)
         #(data_df['images'], data_df['format'], data_df['mode'], data_df['size']) = ([x[i] for x in ret] for i in range(4))
         (data_df['images'], data_df['size']) = ([x[i] for x in ret] for i in range(2))
 
         if np.any([len(x) > 0 for x in data_df['masks']]):
+            logging.debug('reading masks')
             data_df['masks'] = data_df['masks'].map(
                 self.read_and_stack).map(
                     lambda x: x.astype(np.uint8))
-            data_df['masks_seg'] = data_df['masks'].map(preprocess)
+
+            segs = []
+            preps = []
+            prep_segs = []
+            for i in tqdm(range(len(data_df)), desc='preprocess'):
+                m = data_df['masks'].iloc[i]
+                segs.append(as_segmentation(m))
+                prep = preprocess(m)
+
+                # HACK for upper bound/sanity check
+                #prep = scipy.ndimage.label(as_segmentation(separate_touching_nuclei(m)))[0]
+
+                preps.append(prep)
+                prep_segs.append(as_segmentation(prep))
+
+            data_df['masks_seg'] = segs
+            data_df['masks_prep'] = preps
+            data_df['masks_prep_seg'] = prep_segs
+
         else:
             data_df['masks'] = data_df['images'].map(lambda x: np.zeros(x.shape))
             data_df['masks_seg'] = data_df['masks']
 
         #data_df['inv'] = data_df['images'].map(self.is_inverted)
-
         self.data_df = data_df
-
+        logging.debug('done reading data')
 
     def __len__(self):
         return self.data_df.shape[0]
@@ -147,12 +168,11 @@ class NucleusDataset(Dataset):
 
     def __getitem__(self, idx):
 
+        row = self.data_df.iloc[idx].to_dict()
         sample = self.data_df["images"].iloc[idx]
-        masks =  self.data_df["masks"].iloc[idx]
-        masks_seg =  self.data_df["masks_seg"].iloc[idx]
         if self.transform:
-            sample, masks, masks_seg = self.transform(sample, masks, masks_seg)
-        return sample, (masks, masks_seg)
+            row['images'], row['masks'], row['masks_seg'], row['masks_prep'], row['masks_prep_seg'] = self.transform(row['images'], row['masks'], row['masks_seg'], row['masks_prep'], row['masks_prep_seg'])
+        return row
 
 
     def train_test_split(self, **options):

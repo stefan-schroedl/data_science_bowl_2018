@@ -53,7 +53,7 @@ from scipy import ndimage
 def as_segmentation(img):
         return (img>0).astype(int)
 
-def segment_separate_touching_nuclei(labeled_mask, sz=2):
+def separate_touching_nuclei(labeled_mask, sz=2):
     struc = skimage.morphology.disk(sz)
 
     img_sum = np.zeros(labeled_mask.shape)
@@ -63,7 +63,7 @@ def segment_separate_touching_nuclei(labeled_mask, sz=2):
         img_sum += m
     ov = np.maximum(0, img_sum - 1)
 
-    mask_corrected = np.logical_and(labeled_mask > 0, ov == 0).astype(int)
+    mask_corrected = np.where(ov == 0, labeled_mask, 0)
     return mask_corrected #, ov
 
 ## for debug
