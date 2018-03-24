@@ -18,7 +18,7 @@ from matplotlib import _cntr as cntr
 import matplotlib.pyplot as plt
 import torch
 import torchvision
-from torchvision.transforms import ToPILImage
+from torchvision.transforms import ToTensor, ToPILImage
 
 
 def save_object(obj, filename):
@@ -158,6 +158,15 @@ def is_inverted(img,invert_thresh_pd=10.0):
 
     return np.sum(img_th==255)>((invert_thresh_pd/10.0)*np.sum(img_th==0))
 
+
+def torch_to_numpy(t):
+    return (t.numpy().squeeze().transpose(1,2,0)*255).astype(np.uint8)
+
+#def numpy_to_torch(n):
+#    return torch.from_numpy(np.transpose(n, (2, 0, 1))).unsqueeze(0).float()
+
+def numpy_to_torch(n):
+    return ToTensor()(n).unsqueeze(0)
 
 # RLE encoding
 

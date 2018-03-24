@@ -16,6 +16,7 @@ import glob
 from tqdm import tqdm
 
 import numpy as np
+import matplotlib
 import matplotlib.pyplot as plt
 import pandas as pd
 import scipy
@@ -31,12 +32,13 @@ from torch.utils.data import Dataset, DataLoader
 import torchvision
 from torchvision.transforms import ToTensor, ToPILImage
 
-import cv2
-
 from sklearn.neighbors import KNeighborsClassifier
 
+import skimage
+from skimage.color import rgb2grey
+
 import utils
-from utils import mkdir_p, csv_list, int_list, strip_end, init_logging, get_log, set_log, clear_log, insert_log, get_latest_log, get_history_log, prob_to_rles
+from utils import mkdir_p, csv_list, int_list, strip_end, init_logging, get_log, set_log, clear_log, insert_log, get_latest_log, get_history_log, prob_to_rles, numpy_to_torch, torch_to_numpy
 from adjust_learn_rate import get_learning_rate, adjust_learning_rate
 
 from KNN import *
@@ -50,7 +52,7 @@ import architectures
 from architectures import CNN, init_weights
 
 import post_process
-from post_process import parametric_pipeline
+from post_process import parametric_pipeline, parametric_pipeline_v1, parametric_pipeline_orig
 import loss
 from loss import iou_metric, diagnose_errors, show_compare_gt, union_intersection, precision_at
 
@@ -253,8 +255,8 @@ def load_checkpoint(fname,
     except:
         pass
 
-    if model:
-        model.load_state_dict(checkpoint['model_state_dict'])
+    #if model:
+    #    model.load_state_dict(checkpoint['model_state_dict'])
 
     old_model = None
     if 'model' in checkpoint:
@@ -300,9 +302,6 @@ def load_checkpoint(fname,
     return old_model
 
 
-def torch_to_numpy(t):
-    return (t.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
-
 def validate_knn(model, loader, criterion):
     running_loss = 0.0
     cnt = 0
@@ -336,7 +335,8 @@ def iou_metric_tensor(labels, pred, thresh=0.0):
     return iou_metric(labels_np, img_l)
 
 def validate(model, loader, criterion, calc_iou=False):
-    model.eval()
+    #model.eval()
+    model.train() # for some reason, batch norm doesn't work properly with eval mode!!!
     running_loss = 0.0
     cnt = 0
     sum_iou = 0.0
@@ -638,13 +638,14 @@ def baseline(
 #Note: for image and mask, there is no compatible solution that can use transforms.Compse(), see https://github.com/pytorch/vision/issues/9
 #transformations = transforms.Compose([random_rotate90_transform2(),transforms.ToTensor(),])
 
-def train_transform(img, mask, mask_seg):
+def train_transform(img, mask, mask_seg, augment=True):
     # HACK (make dims consistent, first one is channels)
     if len(mask.shape) == 2:
         mask = np.expand_dims(mask, 2)
     if len(mask_seg.shape) == 2:
         mask_seg = np.expand_dims(mask_seg, 2)
-    img, mask, mask_seg = random_rotate90_transform2(img, mask, mask_seg)
+    if augment:
+        img, mask, mask_seg = random_rotate90_transform2(img, mask, mask_seg)
     img = ToTensor()(img)
     mask = torch.from_numpy(np.transpose(mask, (2, 0, 1))).float()
     mask_seg = torch.from_numpy(np.transpose(mask_seg, (2, 0, 1))).float()
@@ -764,7 +765,7 @@ def main():
 
     # optionally resume from a checkpoint
     if args.resume:
-        load_checkpoint(args.resume, model, optimizer, global_state)
+        model = load_checkpoint(args.resume, model, optimizer, global_state)
         # make sure args here is consistent with possibly updated global_state['args']!
         args = global_state['args']
         args.force_overwrite = 1
@@ -801,11 +802,28 @@ def main():
 
     if args.calc_pred > 0:
         # calculate predictions
+        model.train() # for some reason, batch norm doesn't work properly with eval mode!!!
+        thresh = 0.0
         preds = []
         for i in tqdm(range(len(dset.data_df))):
-            img, (mask, mask_seg) = dset[i]
-            pred = model(Variable(img.unsqueeze(0),requires_grad=False)).data.numpy().squeeze()
-            preds.append(pred)
+            img = dset.data_df['images'].iloc[i]
+            pred = model(Variable(numpy_to_torch(img), requires_grad=False)).data.numpy().squeeze()
+            img_th = (pred > thresh).astype(int)
+            img_l = scipy.ndimage.label(img_th)[0]
+            #img_l = parametric_pipeline_orig(img)
+            preds.append(img_l)
+
+            if 0:
+                ii = img # dset.data_df['images'].iloc[0]
+                p = img_l # dset.data_df['pred'].iloc[0]
+                fig, ax = plt.subplots(1, 3, figsize=(50, 50))
+                plt.tight_layout()
+                ax[0].imshow(ii)
+                ax[1].imshow(pred)
+                ax[2].imshow(p)
+                fig.savefig('img_test.%d.png' % i)
+
+
         dset.data_df['pred'] = preds
 
         dset.data_df['rles'] = dset.data_df['pred'].map(lambda x: list(prob_to_rles(x)))
@@ -931,7 +949,7 @@ def main():
                     msg = 'attempt %d: using lbfgs and lr (%f) already at min_lr (%f), giving up' % (recovery_attempts, global_state['lr'], min_lr)
                     logging.error(msg)
                     raise
-                load_checkpoint(ckpt,
+                model = load_checkpoint(ckpt,
                                 model,
                                 optimizer,
                                 global_state)

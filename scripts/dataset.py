@@ -48,8 +48,11 @@ class NucleusDataset(Dataset):
     @staticmethod
     def read_image(in_img_list):
         #img = img_as_float(rgb2hsv(rgba2rgb(io.imread(in_img_list[0]))))
+        #img = cv2.imread(in_img_list[0])[:,:,1] # as done in ali's pipeline
+        #return img, img.shape
         img = Image.open(in_img_list[0])
         return np.array(img.convert('RGB')), img.size
+
 
     @staticmethod
     def is_inverted(img, invert_thresh_pd=10.0):
@@ -133,7 +136,7 @@ class NucleusDataset(Dataset):
             data_df['masks'] = data_df['images'].map(lambda x: np.zeros(x.shape))
             data_df['masks_seg'] = data_df['masks']
 
-        data_df['inv'] = data_df['images'].map(self.is_inverted)
+        #data_df['inv'] = data_df['images'].map(self.is_inverted)
 
         self.data_df = data_df
 

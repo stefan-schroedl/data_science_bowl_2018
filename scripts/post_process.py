@@ -4,7 +4,7 @@ import logging
 import numpy as np
 
 from skimage.morphology import reconstruction
-from skimage import img_as_float, exposure
+from skimage import img_as_float, exposure, img_as_ubyte
 from skimage.util import invert
 from scipy import ndimage as ndi
 from skimage.morphology import watershed
@@ -13,6 +13,8 @@ from skimage.filters import threshold_otsu
 from skimage.morphology import erosion, dilation, binary_dilation, binary_opening, opening, closing, white_tophat
 from skimage.morphology import disk
 from scipy import ndimage as ndi
+
+import cv2
 
 from utils import exceptions_str, save_object
 

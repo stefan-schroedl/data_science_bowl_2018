@@ -5,7 +5,7 @@ import torch.autograd as autograd
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import init
-
+from torch.nn.utils import weight_norm
 
 def init_weights(net, method='kaiming'):
     if method not in ['kaiming', 'xavier']:
@@ -91,35 +91,40 @@ class CNN(nn.Module):
         super(CNN, self).__init__()
         self.mod = ImgModDetector()
         self.coarse = Coarse()
+
+        # make the bn layer usable identically for train and test!
+        affine = True
+        mom = 0.0
+
         self.color_adjust = nn.Sequential(
             nn.Conv2d(6, 3, stride=1, kernel_size=1, padding=0),
             nn.Sigmoid(),
             nn.Conv2d(3, 3, stride=1, kernel_size=1, padding=0))
 
         self.layer1 = nn.Sequential(
-            nn.BatchNorm2d(15, affine=False),
+            nn.BatchNorm2d(15, affine=affine, momentum=mom),
             nn.Conv2d(15, 16, stride=1, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.MaxPool2d(3, stride=1, padding=1))
         self.layer2 = nn.Sequential(
-            nn.BatchNorm2d(16, affine=False),
+            nn.BatchNorm2d(16, affine=affine, momentum=mom),
             nn.Conv2d(16, 16, stride=1, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.MaxPool2d(3, stride=1, padding=1))
         self.layer3 = nn.Sequential(
-            nn.BatchNorm2d(16, affine=False),
+            nn.BatchNorm2d(16, affine=affine, momentum=mom),
             nn.Conv2d(16, 16, stride=1, kernel_size=3, padding=1),
             nn.ReLU())
         self.layer4 = nn.Sequential(
-            nn.BatchNorm2d(16, affine=False),
+            nn.BatchNorm2d(16, affine=affine, momentum=mom),
             nn.Conv2d(16, 16, stride=1, kernel_size=3, padding=1),
             nn.ReLU())
         self.layer5 = nn.Sequential(
-            nn.BatchNorm2d(16, affine=False),
+            nn.BatchNorm2d(16, affine=affine, momentum=mom),
             nn.Conv2d(16, 16, stride=1, kernel_size=3, padding=1),
             nn.ReLU())
         self.layer6 = nn.Sequential(
-            nn.BatchNorm2d(16, affine=False),
+            nn.BatchNorm2d(16, affine=affine, momentum=mom),
             nn.Conv2d(16, 16, stride=1, kernel_size=3, padding=1),
             nn.ReLU())
 
@@ -132,7 +137,7 @@ class CNN(nn.Module):
         img_and_type = torch.cat((x,img_tp),1)
         norm_img = self.color_adjust(img_and_type)
         c1, c2, c3 = self.coarse(norm_img)
-        norm_img_and_type_and_coarse = torch.cat((x,img_tp,c1,c2,c3),1)
+        norm_img_and_type_and_coarse = torch.cat((norm_img,img_tp,c1,c2,c3),1)
 
         out = self.layer1(norm_img_and_type_and_coarse)
         out = self.layer2(out)
