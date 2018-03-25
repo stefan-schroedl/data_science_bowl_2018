@@ -73,7 +73,7 @@ def get_latest_log(what, default=None):
 
     if latest_it == -1 or what not in latest_row:
         msg = 'no such key in log: %s' % what
-        if default:
+        if default is not None:
             logging.warning(msg)
             return default, 0
         raise ValueError('no such key in log: %s' % what)
