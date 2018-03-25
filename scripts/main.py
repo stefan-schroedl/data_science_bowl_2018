@@ -323,12 +323,11 @@ def validate_knn(model, loader, criterion):
     return l
 
 
-def torch_pred_to_np_label(pred, sz=2, thresh=0.0):
+def torch_pred_to_np_label(pred, sz=2, max_clusters_for_dilation=100, thresh=0.0):
     if not isinstance(pred, np.ndarray):
         pred_np = pred.data.numpy().squeeze()
     img_th = (pred_np > thresh).astype(int)
-    img_l = scipy.ndimage.label(img_th)[0]
-    img_l = redilate_mask(img_l, sz)
+    img_l = redilate_mask(img_th, sz=sz, skip_clusters=max_clusters_for_dilation)
     return img_l, pred_np
 
 
@@ -359,12 +358,10 @@ def validate(model, loader, criterion, calc_iou=False):
 
         loss = criterion(pred, labels_seg)
         running_loss += loss.data[0]
-        cnt = cnt + 1
-
+        cnt += 1
         if calc_iou:
             pred_l, _ = torch_pred_to_np_label(pred)
             sum_iou += iou_metric(row['masks'].numpy().squeeze(), pred_l)
-
     l = running_loss / cnt
     iou = sum_iou / cnt
     return l, iou
@@ -498,7 +495,7 @@ def train_cnn (train_loader,
             if inner_cnt[0] == 0: # for lbfgs, only record the first eval!
                 running_loss.update(loss.data[0])
                 loss_stats.update(loss.data[0])
-                pred_l, _ = torch_pred_to_np_label(pred)
+                pred_l, _ = torch_pred_to_np_label(pred, max_clusters_for_dilation=50) # dilation is slow, skip!
                 iou_stats.update(iou_metric(row['masks'].numpy().squeeze(), pred_l))
             logging.debug('loss: %s', loss.data.numpy()[0])
 
@@ -570,6 +567,9 @@ def train_cnn (train_loader,
                     insert_log(i, 'valid_iou', iou)
                     validated = True
 
+                iou = get_latest_log('iou', 0.0)[0]
+                l = get_latest_log('valid_loss', 0.0)[0]
+
                 if i % print_every == 0:
                     logging.info('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f\tiou: %.3f\tlr: %g' %
                                  (epoch, i, train_loss, l, iou, global_state['lr']))
@@ -580,7 +580,6 @@ def train_cnn (train_loader,
 
                 if i % save_every == 0:
                     is_best = False
-                    l = get_latest_log('valid_loss')[0]
                     if global_state['best_loss'] > l:
                         global_state['best_loss'] = l
                         global_state['best_it'] = global_state['it']
@@ -807,7 +806,7 @@ def main():
         for i in tqdm(range(len(dset.data_df))):
             img = dset.data_df['images'].iloc[i]
             pred = model(Variable(numpy_to_torch(img, True), requires_grad=False))
-            pred_l, pred = torch_pred_to_np_label(pred)
+            pred_l, pred = torch_pred_to_np_label(pred, max_clusters_for_dilation=1e20) # highest precision
             preds.append(pred_l)
 
             if 1:

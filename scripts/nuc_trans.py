@@ -1,5 +1,7 @@
 import os
 from datetime import datetime
+import logging
+
 PROJECT_PATH = os.path.dirname(os.path.realpath(__file__))
 IDENTIFIER   = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 
@@ -72,14 +74,18 @@ def erode_mask(mask, sz=2):
         struc = skimage.morphology.disk(sz)
         return np.where(ndi.binary_erosion(mask, structure=struc, border_value=1), mask, 0)
 
-def redilate_mask(mask_seg, sz=2):
-        struc = skimage.morphology.disk(sz)
+def redilate_mask(mask_seg, sz=2, skip_clusters=1e20):
         mask_l, n = ndi.label(mask_seg)
+        if n >= skip_clusters:
+                # too slow, use shortcut
+                return mask_l
+        struc = skimage.morphology.disk(sz)
         mask_dil = np.zeros(mask_l.shape, dtype=np.int32)
+
         for cluster in range(1, n + 1):
-                cur = (mask_l == cluster).astype(int)
+                cur = (mask_l == cluster)
                 cur = skimage.morphology.binary_dilation(cur, struc)
-                mask_dil[cur > 0.5] = cluster
+                mask_dil = np.where(cur, cluster, mask_dil)
         return mask_dil
 
 
