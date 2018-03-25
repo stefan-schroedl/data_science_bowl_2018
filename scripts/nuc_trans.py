@@ -64,7 +64,7 @@ def separate_touching_nuclei(labeled_mask, sz=2):
     ov = np.maximum(0, img_sum - 1)
 
     mask_corrected = np.where(ov == 0, labeled_mask, 0)
-    return mask_corrected #, ov
+    return mask_corrected, ov
 
 ## for debug
 def dummy_transform(image):

@@ -50,7 +50,10 @@ def insert_log(it, k, v):
     if len(LOG) > 0:
         last = LOG[-1]
         if last['it'] > it:
-            raise ValueError('trying to change history at %d, current is %d' % (it, last['it']))
+            msg = 'trying to change history at %d, current is %d' % (it, last['it'])
+            logging.error(msg)
+            # raise ValueError('trying to change history at %d, current is %d' % (it, last['it']))
+            return
         if last['it'] != it:
             last = {'it':it}
             LOG.append(last)
@@ -165,8 +168,17 @@ def torch_to_numpy(t):
 #def numpy_to_torch(n):
 #    return torch.from_numpy(np.transpose(n, (2, 0, 1))).unsqueeze(0).float()
 
-def numpy_to_torch(n):
-    return ToTensor()(n).unsqueeze(0)
+def numpy_to_torch(n, unsqueeze=False):
+    if n.ndim == 2:
+        n = np.expand_dims(n, 2)
+    if n.ndim == 3 and n.shape[2] == 1:
+        # single channel or mask
+        n_conv = torch.from_numpy(np.transpose(n, (2, 0, 1))).float()
+    else:
+        n_conv = ToTensor()(n)
+    if unsqueeze:
+        n_conv = n_conv.unsqueeze(0)
+    return n_conv
 
 # RLE encoding
 

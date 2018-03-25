@@ -178,7 +178,7 @@ parser.add('--use-instance-weights', default=0, type=int,
            metavar='N', help='apply instance weights during training [default: %(default)s]')
 parser.add('--clip-gradient', default=0.25, type=float,
            metavar='C', help='clip excessive gradients during training [default: %(default)s]')
-parser.add('--criterion', '-C', default='mse', choices=['mse','bce','jaccard','dice'],
+parser.add('--criterion', '-C', default='bce', choices=['mse','bce','jaccard','dice'],
            metavar='C', help='loss function [default: %(default)s]')
 parser.add('--optim', '-O', default='sgd', choices=['sgd','adam','lbfgs'],
            help='optimization algorithm [default: %(default)s]')
@@ -491,9 +491,10 @@ def train_cnn (train_loader,
             img, labels_seg = Variable(row['images']), Variable(row['masks_prep_seg'])
             pred = model(img)
             if global_state['args'].use_instance_weights > 0:
-                w = backprop_weight(row['masks_prep'].numpy().squeeze(), pred.data[0].numpy().squeeze(), global_state)
+                w = backprop_weight(row['masks'].numpy().squeeze(), pred.data[0].numpy().squeeze(), global_state)
                 weight_stats.update(w)
                 criterion.weight = torch.FloatTensor([w])
+                criterion.weight = row['ov'] * w
                 #criterion.weight = pred.data.clone().fill_(w)
 
             loss = criterion(pred, labels_seg)
@@ -631,31 +632,25 @@ def baseline(
     return running_loss/cnt, m
 
 
-#Note: for image and mask, there is no compatible solution that can use transforms.Compse(), see https://github.com/pytorch/vision/issues/9
+#Note: for image and mask, there is no compatible solution that can use transforms.Compose(), see https://github.com/pytorch/vision/issues/9
 #transformations = transforms.Compose([random_rotate90_transform2(),transforms.ToTensor(),])
 
-def train_transform(img, mask, mask_seg, mask_prep, mask_prep_seg, augment=True):
-    # HACK (make dims consistent, first one is channels)
-    if len(mask.shape) == 2:
-        mask = np.expand_dims(mask, 2)
-    if len(mask_seg.shape) == 2:
-        mask_seg = np.expand_dims(mask_seg, 2)
+def train_transform(images, augment=True):
 
-    if len(mask_prep.shape) == 2:
-        mask_prep = np.expand_dims(mask_prep, 2)
-    if len(mask_prep_seg.shape) == 2:
-        mask_prep_seg = np.expand_dims(mask_prep_seg, 2)
+    images_new = []
+    # HACK (make dims consistent, last one is channels)
+    for img in images:
+        if len(img.shape) == 2:
+            img = np.expand_dims(img, 2)
+        images_new.append(img)
 
     if augment:
-        img, mask, mask_seg, mask_prep, mask_prep_seg = random_rotate90_transform2(img, mask, mask_seg, mask_prep, mask_prep_seg)
-    img = ToTensor()(img)
-    mask = torch.from_numpy(np.transpose(mask, (2, 0, 1))).float()
-    mask_seg = torch.from_numpy(np.transpose(mask_seg, (2, 0, 1))).float()
+        images_new = random_rotate90_transform2(*images_new)
 
-    mask_prep = torch.from_numpy(np.transpose(mask_prep, (2, 0, 1))).float()
-    mask_prep_seg = torch.from_numpy(np.transpose(mask_prep_seg, (2, 0, 1))).float()
+    for i in range(len(images_new)):
+        images_new[i] = numpy_to_torch(images_new[i])
 
-    return img, mask, mask_seg, mask_prep, mask_prep_seg
+    return images_new
 
 
 def main():
@@ -814,13 +809,13 @@ def main():
         preds = []
         for i in tqdm(range(len(dset.data_df))):
             img = dset.data_df['images'].iloc[i]
-            pred = model(Variable(numpy_to_torch(img), requires_grad=False)).data.numpy().squeeze()
+            pred = model(Variable(numpy_to_torch(img, True), requires_grad=False)).data.numpy().squeeze()
             img_th = (pred > thresh).astype(int)
             img_l = scipy.ndimage.label(img_th)[0]
             #img_l = parametric_pipeline_orig(img)
             preds.append(img_l)
 
-            if 0:
+            if 1:
                 ii = img # dset.data_df['images'].iloc[0]
                 p = img_l # dset.data_df['pred'].iloc[0]
                 fig, ax = plt.subplots(1, 3, figsize=(50, 50))
@@ -829,6 +824,7 @@ def main():
                 ax[1].imshow(pred)
                 ax[2].imshow(p)
                 fig.savefig('img_test.%d.png' % i)
+                plt.close()
 
 
         dset.data_df['pred'] = preds
