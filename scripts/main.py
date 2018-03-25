@@ -38,13 +38,13 @@ import skimage
 from skimage.color import rgb2grey
 
 import utils
-from utils import mkdir_p, csv_list, int_list, strip_end, init_logging, get_log, set_log, clear_log, insert_log, get_latest_log, get_history_log, prob_to_rles, numpy_to_torch, torch_to_numpy
+from utils import mkdir_p, csv_list, int_list, strip_end, init_logging, get_log, set_log, clear_log, insert_log, get_latest_log, get_history_log, prob_to_rles, labels_to_rles, numpy_to_torch, torch_to_numpy
 from adjust_learn_rate import get_learning_rate, adjust_learning_rate
 
 from KNN import *
 
 import nuc_trans
-from nuc_trans import random_rotate90_transform2, as_segmentation, separate_touching_nuclei
+from nuc_trans import random_rotate90_transform2, as_segmentation, separate_touching_nuclei, erode_mask, redilate_mask
 import dataset
 from dataset import NucleusDataset
 
@@ -323,18 +323,13 @@ def validate_knn(model, loader, criterion):
     return l
 
 
-def iou_metric_tensor(labels, pred, thresh=0.0):
-
-    if pred.data.max() < thresh or pred.data.min() > thresh: # shortcut
-        return 0.0
-
-    pred_np = pred.data.numpy().squeeze()
-    labels_np = labels.numpy().squeeze()
-
+def torch_pred_to_np_label(pred, sz=2, thresh=0.0):
+    if not isinstance(pred, np.ndarray):
+        pred_np = pred.data.numpy().squeeze()
     img_th = (pred_np > thresh).astype(int)
     img_l = scipy.ndimage.label(img_th)[0]
-
-    return iou_metric(labels_np, img_l)
+    img_l = redilate_mask(img_l, sz)
+    return img_l, pred_np
 
 
 def validate(model, loader, criterion, calc_iou=False):
@@ -349,7 +344,7 @@ def validate(model, loader, criterion, calc_iou=False):
 
     for i, row in tqdm(enumerate(loader), desc='test', total=loader.__len__()):
 
-        img, labels_seg = Variable(row['images']), Variable(row['masks_seg'])
+        img, labels_seg = Variable(row['images'], requires_grad=False), Variable(row['masks_seg'], requires_grad=False)
         pred = model(img)
         pred_lab = pred
 
@@ -367,7 +362,8 @@ def validate(model, loader, criterion, calc_iou=False):
         cnt = cnt + 1
 
         if calc_iou:
-            sum_iou += iou_metric_tensor(row['masks'], pred_lab)
+            pred_l, _ = torch_pred_to_np_label(pred)
+            sum_iou += iou_metric(row['masks'].numpy().squeeze(), pred_l)
 
     l = running_loss / cnt
     iou = sum_iou / cnt
@@ -494,7 +490,7 @@ def train_cnn (train_loader,
                 w = backprop_weight(row['masks'].numpy().squeeze(), pred.data[0].numpy().squeeze(), global_state)
                 weight_stats.update(w)
                 criterion.weight = torch.FloatTensor([w])
-                criterion.weight = row['ov'] * w
+                #criterion.weight = row['ov'] * w
                 #criterion.weight = pred.data.clone().fill_(w)
 
             loss = criterion(pred, labels_seg)
@@ -502,7 +498,8 @@ def train_cnn (train_loader,
             if inner_cnt[0] == 0: # for lbfgs, only record the first eval!
                 running_loss.update(loss.data[0])
                 loss_stats.update(loss.data[0])
-                iou_stats.update(iou_metric_tensor(row['masks'], pred))
+                pred_l, _ = torch_pred_to_np_label(pred)
+                iou_stats.update(iou_metric(row['masks'].numpy().squeeze(), pred_l))
             logging.debug('loss: %s', loss.data.numpy()[0])
 
             loss.backward()
@@ -659,11 +656,11 @@ def main():
 
     # in overrides, replace '-' by '_', and check that it is indeed an option
     new_overrides = []
-    for x in args.override_model_opts:
-        x_new = x.replace('-','_')
-        if x_new not in args.__dict__:
-            raise ValueError('overriding option %s does not exist' % x)
-        new_overrides.insert(0, x_new)
+    for opt in args.override_model_opts:
+        opt_new = opt.replace('-','_')
+        if opt_new not in args.__dict__:
+            raise ValueError('overriding option %s does not exist' % opt)
+        new_overrides.insert(0, opt_new)
     args.override_model_opts = new_overrides
 
     if args.out_dir is None:
@@ -779,7 +776,7 @@ def main():
 
     # Data loading
     def load_data():
-        return NucleusDataset(args.data, stage_name=args.stage, group_name=args.group, preprocess=separate_touching_nuclei, transform=train_transform)
+        return NucleusDataset(args.data, stage_name=args.stage, group_name=args.group, preprocess=erode_mask, transform=train_transform)
         #return NucleusDataset(args.data, stage_name=args.stage, group_name=args.group, preprocess=lambda x: return x, transform=train_transform)
     timer = timeit.Timer(load_data)
     t,dset = timer.timeit(number=1)
@@ -809,27 +806,22 @@ def main():
         preds = []
         for i in tqdm(range(len(dset.data_df))):
             img = dset.data_df['images'].iloc[i]
-            pred = model(Variable(numpy_to_torch(img, True), requires_grad=False)).data.numpy().squeeze()
-            img_th = (pred > thresh).astype(int)
-            img_l = scipy.ndimage.label(img_th)[0]
-            #img_l = parametric_pipeline_orig(img)
-            preds.append(img_l)
+            pred = model(Variable(numpy_to_torch(img, True), requires_grad=False))
+            pred_l, pred = torch_pred_to_np_label(pred)
+            preds.append(pred_l)
 
             if 1:
-                ii = img # dset.data_df['images'].iloc[0]
-                p = img_l # dset.data_df['pred'].iloc[0]
                 fig, ax = plt.subplots(1, 3, figsize=(50, 50))
                 plt.tight_layout()
-                ax[0].imshow(ii)
+                ax[0].imshow(img)
                 ax[1].imshow(pred)
-                ax[2].imshow(p)
+                ax[2].imshow(pred_l)
                 fig.savefig('img_test.%d.png' % i)
                 plt.close()
 
-
         dset.data_df['pred'] = preds
 
-        dset.data_df['rles'] = dset.data_df['pred'].map(lambda x: list(prob_to_rles(x)))
+        dset.data_df['rles'] = dset.data_df['pred'].map(lambda x: list(labels_to_rles(x)))
 
         out_pred_list = []
         for _, c_row in tqdm(dset.data_df.iterrows()):

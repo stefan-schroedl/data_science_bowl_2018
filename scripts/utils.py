@@ -228,6 +228,11 @@ def prob_to_rles(x, cut_off = 0.5):
         yield rle_encoding(lab_img==i)
 
 
+def labels_to_rles(lab_img):
+    if lab_img.max()<1:
+        lab_img[0,0] = 1 # ensure at least one prediction per image
+    for i in range(1, lab_img.max()+1):
+        yield rle_encoding(lab_img==i)
 
 
 def read_img_join_masks(img_id, root='../../input/stage1_train/'):

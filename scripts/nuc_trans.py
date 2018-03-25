@@ -47,7 +47,7 @@ import matplotlib.pyplot as plt
 import skimage
 import skimage.color
 import skimage.morphology
-from scipy import ndimage
+from scipy import ndimage as ndi
 
 # preprocessing
 def as_segmentation(img):
@@ -66,10 +66,22 @@ def separate_touching_nuclei(labeled_mask, sz=2):
     mask_corrected = np.where(ov == 0, labeled_mask, 0)
     return mask_corrected, ov
 
-## for debug
-def dummy_transform(image):
-    print ('\tdummy_transform')
-    return image
+# erode masks by one pixel for training, dilate the prediction back at the end
+
+def erode_mask(mask, sz=2):
+        struc = skimage.morphology.disk(sz)
+        return np.where(ndi.binary_erosion(mask, structure=struc, border_value=1), mask, 0)
+
+def redilate_mask(mask_seg, sz=2):
+        struc = skimage.morphology.disk(sz)
+        mask_l, n = ndi.label(mask_seg)
+        mask_dil = np.zeros(mask_l.shape, dtype=np.int32)
+        for cluster in range(1, n + 1):
+                cur = (mask_l == cluster).astype(int)
+                cur = skimage.morphology.binary_dilation(cur, struc)
+                mask_dil[cur > 0.5] = cluster
+        return mask_dil
+
 
 # kaggle science bowl-2 : ################################################################
 

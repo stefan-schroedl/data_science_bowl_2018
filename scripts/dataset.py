@@ -146,25 +146,25 @@ class NucleusDataset(Dataset):
             for i in tqdm(range(len(data_df)), desc='preprocess'):
                 m = data_df['masks'].iloc[i]
                 segs.append(as_segmentation(m))
-                #prep = preprocess(m)
-                prep, ov = separate_touching_nuclei(m)
+                prep = preprocess(m)
 
-                ov = ov.astype(float)
-                ov = ov * 15.0 + 1.0
-                ov = ov / ov.mean()
+                #prep, ov = separate_touching_nuclei(m)
+                #ov = ov.astype(float)
+                #ov = ov * 15.0 + 1.0
+                #ov = ov / ov.mean()
                 # print ov.min(), ov.max(), ov.mean(), ov
+                # ovs.append(ov)
 
                 # HACK for upper bound/sanity check
                 #prep = scipy.ndimage.label(as_segmentation(separate_touching_nuclei(m)))[0]
 
                 preps.append(prep)
-                ovs.append(ov)
                 prep_segs.append(as_segmentation(prep))
 
             data_df['masks_seg'] = segs
             data_df['masks_prep'] = preps
             data_df['masks_prep_seg'] = prep_segs
-            data_df['ov'] = ovs
+            #data_df['ov'] = ovs
 
         else:
             data_df['masks'] = data_df['images'].map(lambda x: np.zeros(x.shape))
@@ -182,7 +182,7 @@ class NucleusDataset(Dataset):
 
         row = self.data_df.iloc[idx].to_dict()
         if self.transform:
-            row['images'], row['masks'], row['masks_seg'], row['masks_prep'], row['masks_prep_seg'], row['ov'] = self.transform([row['images'], row['masks'], row['masks_seg'], row['masks_prep'], row['masks_prep_seg'], row['ov']])
+            row['images'], row['masks'], row['masks_seg'], row['masks_prep'], row['masks_prep_seg'] = self.transform([row['images'], row['masks'], row['masks_seg'], row['masks_prep'], row['masks_prep_seg']])
         return row
 
 
