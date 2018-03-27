@@ -1,11 +1,14 @@
 #!/usr/bin/env python
 
+import math
+
 import torch
 import torch.autograd as autograd
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import init
 from torch.nn.utils import weight_norm
+
 
 def init_weights(net, method='kaiming'):
     if method not in ['kaiming', 'xavier']:
@@ -85,9 +88,9 @@ class Coarse(nn.Module):
         l3out = up(l3)
         return l1out, l2out, l3out
 
-        
+
 class CNN(nn.Module):
-    def __init__(self):
+    def __init__(self, num_filters=16):
         super(CNN, self).__init__()
         self.mod = ImgModDetector()
         self.coarse = Coarse()
@@ -103,33 +106,33 @@ class CNN(nn.Module):
 
         self.layer1 = nn.Sequential(
             nn.BatchNorm2d(15, affine=affine, momentum=mom),
-            nn.Conv2d(15, 16, stride=1, kernel_size=3, padding=1),
+            nn.Conv2d(15, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.MaxPool2d(3, stride=1, padding=1))
         self.layer2 = nn.Sequential(
-            nn.BatchNorm2d(16, affine=affine, momentum=mom),
-            nn.Conv2d(16, 16, stride=1, kernel_size=3, padding=1),
+            nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
+            nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.MaxPool2d(3, stride=1, padding=1))
         self.layer3 = nn.Sequential(
-            nn.BatchNorm2d(16, affine=affine, momentum=mom),
-            nn.Conv2d(16, 16, stride=1, kernel_size=3, padding=1),
+            nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
+            nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU())
         self.layer4 = nn.Sequential(
-            nn.BatchNorm2d(16, affine=affine, momentum=mom),
-            nn.Conv2d(16, 16, stride=1, kernel_size=3, padding=1),
+            nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
+            nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU())
         self.layer5 = nn.Sequential(
-            nn.BatchNorm2d(16, affine=affine, momentum=mom),
-            nn.Conv2d(16, 16, stride=1, kernel_size=3, padding=1),
+            nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
+            nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU())
         self.layer6 = nn.Sequential(
-            nn.BatchNorm2d(16, affine=affine, momentum=mom),
-            nn.Conv2d(16, 16, stride=1, kernel_size=3, padding=1),
+            nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
+            nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU())
 
         self.layer7 = nn.Sequential(
-            nn.Conv2d(16, 1, stride=1, kernel_size=1, padding=0))
+            nn.Conv2d(num_filters, 1, stride=1, kernel_size=1, padding=0))
 
 
     def forward(self, x):
@@ -161,5 +164,119 @@ class CNN(nn.Module):
         norm_img = self.color_adjust(img_and_type)
         c1, c2, c3 = self.coarse(norm_img)
         return c1, c2, c3
+  
+## UNET
+## https://becominghuman.ai/investigating-focal-and-dice-loss-for-the-kaggle-2018-data-science-bowl-65fb9af4f36c
+## (adapted from python 3, and gray scale images)
+
+DROPOUT = 0.5
+
+class UNetBlock(nn.Module):
+    def __init__(self, filters_in, filters_out):
+        super(UNetBlock, self).__init__()
+        self.filters_in = filters_in
+        self.filters_out = filters_out
+        self.conv1 = nn.Conv2d(filters_in, filters_out, (3, 3), padding=1)
+        self.norm1 = nn.BatchNorm2d(filters_out)
+        self.conv2 = nn.Conv2d(filters_out, filters_out, (3, 3), padding=1)
+        self.norm2 = nn.BatchNorm2d(filters_out)
         
+        self.activation = nn.ReLU()
         
+    def forward(self, x):            
+        conved1 = self.conv1(x)
+        conved1 = self.activation(conved1)
+        conved1 = self.norm1(conved1)
+        conved2 = self.conv2(conved1)
+        conved2 = self.activation(conved2)
+        conved2 = self.norm2(conved2)
+        return conved2
+        
+class UNetDownBlock(UNetBlock):
+    def __init__(self, filters_in, filters_out, pool=True):
+        super(UNetDownBlock, self).__init__(filters_in, filters_out)
+        if pool:
+            self.pool = nn.MaxPool2d(2)
+        else:
+            self.pool = lambda x: x
+        
+    def forward(self, x):
+        return self.pool(super(UNetDownBlock, self).forward(x))
+    
+class UNetUpBlock(UNetBlock):
+    def __init__(self, filters_in, filters_out):
+        super(UNetUpBlock, self).__init__(filters_in, filters_out)
+        self.upconv = nn.Conv2d(filters_in, filters_in // 2, (3, 3), padding=1)
+        self.upnorm = nn.BatchNorm2d(filters_in // 2)
+
+    def forward(self, x, cross_x):
+        x = F.upsample(x, size=cross_x.size()[-2:], mode='bilinear')
+        x = self.upnorm(self.activation(self.upconv(x)))
+        x = torch.cat((x, cross_x), 1)
+        return super(UNetUpBlock, self).forward(x)
+
+class UNet(nn.Module):
+    def __init__(self, layers, init_filters):
+        super(UNet, self).__init__()
+        self.down_layers = nn.ModuleList()
+        self.up_layers = nn.ModuleList()
+        self.init_filters = init_filters
+        
+        filter_size = init_filters
+        for _ in range(layers - 1):
+            self.down_layers.append(
+                UNetDownBlock(filter_size, filter_size*2)
+            )
+            filter_size *= 2
+        self.down_layers.append(UNetDownBlock(filter_size, filter_size * 2, pool=False))
+        for i in range(layers):
+            self.up_layers.append(
+                UNetUpBlock(filter_size * 2, filter_size)
+            )
+            filter_size //= 2
+
+        # new
+        self.squash_layer = nn.Conv2d(3, 1, stride=1, kernel_size=1, padding=0)
+        self.data_norm = nn.BatchNorm2d(1)
+        self.init_layer = nn.Conv2d(1, init_filters, (7, 7), padding=3)
+        self.activation = nn.ReLU()
+        self.init_norm = nn.BatchNorm2d(init_filters)
+        self.dropout = nn.Dropout(DROPOUT)
+                
+    def forward(self, x):
+        x = self.squash_layer(x)
+        x = self.data_norm(x)
+        x = self.init_norm(self.activation(self.init_layer(x)))
+        
+        saved_x = [x]
+        for layer in self.down_layers:
+            saved_x.append(x)
+            x = self.dropout(layer(x))
+        is_first = True
+        for layer, saved_x in zip(self.up_layers, reversed(saved_x)):
+            if not is_first:
+                is_first = False
+                x = self.dropout(x)
+            x = layer(x, saved_x)
+        return x
+                                  
+class UNetClassify(UNet):
+    def __init__(self, *args, **kwargs):
+        init_val = kwargs.pop('init_val', 0.5)
+        super(UNetClassify, self).__init__(*args, **kwargs)
+        self.output_layer = nn.Conv2d(self.init_filters, 1, (3, 3), padding=1)
+        
+        for name, param in self.named_parameters():
+            typ = name.split('.')[-1]
+            if typ == 'bias':
+                if 'output_layer' in name:
+                    # Init so that the average will end up being init_val
+                    param.data.fill_(-math.log((1-init_val)/init_val))
+                else:
+                    param.data.zero_()
+        
+    def forward(self, x):
+        x = super(UNetClassify, self).forward(x)
+        # Note that we don't perform the sigmoid here.
+        return self.output_layer(x) 
+      

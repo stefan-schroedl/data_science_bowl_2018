@@ -49,7 +49,7 @@ import dataset
 from dataset import NucleusDataset
 
 import architectures
-from architectures import CNN, init_weights
+from architectures import CNN, UNetClassify, init_weights
 
 import post_process
 from post_process import parametric_pipeline, parametric_pipeline_v1, parametric_pipeline_orig
@@ -561,13 +561,14 @@ def train_cnn (train_loader,
 
             validated = False
             for i in range(it, it + num_acc):
+                
                 if i % eval_every == 0 and not validated:
                     l, iou = validate(model, valid_loader, criterion, True)
                     insert_log(i, 'valid_loss', l)
                     insert_log(i, 'valid_iou', iou)
                     validated = True
 
-                iou = get_latest_log('iou', 0.0)[0]
+                iou = get_latest_log('valid_iou', 0.0)[0]
                 l = get_latest_log('valid_loss', 0.0)[0]
 
                 if i % print_every == 0:
@@ -698,7 +699,8 @@ def main():
 
     elif args.model == 'cnn':
         trainer = train_cnn
-        model = CNN()
+        #model = CNN()
+        model = UNetClassify(layers=4, init_filters=32)
         if args.weight_init != 'default':
            init_weights(model, args.weight_init)
     else:
@@ -806,7 +808,7 @@ def main():
         for i in tqdm(range(len(dset.data_df))):
             img = dset.data_df['images'].iloc[i]
             pred = model(Variable(numpy_to_torch(img, True), requires_grad=False))
-            pred_l, pred = torch_pred_to_np_label(pred, max_clusters_for_dilation=1e20) # highest precision
+            pred_l, pred = torch_pred_to_np_label(pred, max_clusters_for_dilation=0) # 1e20) # highest precision
             preds.append(pred_l)
 
             if 1:
