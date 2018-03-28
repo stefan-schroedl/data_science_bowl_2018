@@ -44,7 +44,7 @@ from adjust_learn_rate import get_learning_rate, adjust_learning_rate
 from KNN import *
 
 import nuc_trans
-from nuc_trans import random_rotate90_transform2, as_segmentation, separate_touching_nuclei, erode_mask, redilate_mask
+from nuc_trans import as_segmentation, separate_touching_nuclei, erode_mask, redilate_mask, noop_augmentation, nuc_augmentation
 import dataset
 from dataset import NucleusDataset
 
@@ -57,6 +57,7 @@ import loss
 from loss import iou_metric, diagnose_errors, show_compare_gt, union_intersection, precision_at
 
 from meter import AverageMeter
+
 
 class TrainingBlowupError(Exception):
     def __init__(self, message, errors=None):
@@ -331,7 +332,7 @@ def torch_pred_to_np_label(pred, sz=2, max_clusters_for_dilation=100, thresh=0.0
     return img_l, pred_np
 
 
-def validate(model, loader, criterion, calc_iou=False):
+def validate(model, loader, criterion, calc_iou=False, max_clusters_for_dilation=100):
     #model.eval()
     model.train() # for some reason, batch norm doesn't work properly with eval mode!!!
 
@@ -360,7 +361,7 @@ def validate(model, loader, criterion, calc_iou=False):
         running_loss += loss.data[0]
         cnt += 1
         if calc_iou:
-            pred_l, _ = torch_pred_to_np_label(pred)
+            pred_l, _ = torch_pred_to_np_label(pred, max_clusters_for_dilation=max_clusters_for_dilation)
             sum_iou += iou_metric(row['masks'].numpy().squeeze(), pred_l)
     l = running_loss / cnt
     iou = sum_iou / cnt
@@ -629,27 +630,6 @@ def baseline(
     return running_loss/cnt, m
 
 
-#Note: for image and mask, there is no compatible solution that can use transforms.Compose(), see https://github.com/pytorch/vision/issues/9
-#transformations = transforms.Compose([random_rotate90_transform2(),transforms.ToTensor(),])
-
-def train_transform(images, augment=True):
-
-    images_new = []
-    # HACK (make dims consistent, last one is channels)
-    for img in images:
-        if len(img.shape) == 2:
-            img = np.expand_dims(img, 2)
-        images_new.append(img)
-
-    if augment:
-        images_new = random_rotate90_transform2(*images_new)
-
-    for i in range(len(images_new)):
-        images_new[i] = numpy_to_torch(images_new[i])
-
-    return images_new
-
-
 def main():
     # global it, best_it, best_loss, LOG, args
     args = parser.parse_args()
@@ -699,8 +679,8 @@ def main():
 
     elif args.model == 'cnn':
         trainer = train_cnn
-        #model = CNN()
-        model = UNetClassify(layers=4, init_filters=32)
+        model = CNN(32)
+        #model = UNetClassify(layers=4, init_filters=32)
         if args.weight_init != 'default':
            init_weights(model, args.weight_init)
     else:
@@ -777,8 +757,7 @@ def main():
 
     # Data loading
     def load_data():
-        return NucleusDataset(args.data, stage_name=args.stage, group_name=args.group, preprocess=erode_mask, transform=train_transform)
-        #return NucleusDataset(args.data, stage_name=args.stage, group_name=args.group, preprocess=lambda x: return x, transform=train_transform)
+        return NucleusDataset(args.data, stage_name=args.stage, group_name=args.group, preprocess=erode_mask, transform=nuc_augmentation)
     timer = timeit.Timer(load_data)
     t,dset = timer.timeit(number=1)
     logging.info('load time: %.1f\n' % t)
@@ -789,12 +768,12 @@ def main():
     stratify = None
     if args.stratify > 0:
         stratify = dset.data_df['images'].map(lambda x: '{}'.format(x.size))
-    train_dset, valid_dset = dset.train_test_split(test_size=args.valid_fraction, random_state=1, shuffle=True, stratify=stratify)
+    train_dset, valid_dset = dset.train_test_split(test_size=args.valid_fraction, random_state=1, shuffle=True, stratify=stratify, test_transform=noop_augmentation)
     train_loader = DataLoader(train_dset, batch_size=1, shuffle=True)
     valid_loader = DataLoader(valid_dset, batch_size=1, shuffle=True)
 
     if args.calc_iou > 0:
-        loss, iou = validate(model, train_loader, criterion, calc_iou=True)
+        loss, iou = validate(model, train_loader, criterion, calc_iou=True, max_clusters_for_dilation=1e20)
         msg = 'loss = %f, iou = %f' % (loss, iou)
         logging.info(msg)
         print msg
@@ -808,7 +787,7 @@ def main():
         for i in tqdm(range(len(dset.data_df))):
             img = dset.data_df['images'].iloc[i]
             pred = model(Variable(numpy_to_torch(img, True), requires_grad=False))
-            pred_l, pred = torch_pred_to_np_label(pred, max_clusters_for_dilation=0) # 1e20) # highest precision
+            pred_l, pred = torch_pred_to_np_label(pred, max_clusters_for_dilation=1e20) # highest precision
             preds.append(pred_l)
 
             if 1:

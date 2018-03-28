@@ -35,7 +35,7 @@ from tqdm import tqdm
 
 from utils import numpy_to_torch
 
-from nuc_trans import as_segmentation, separate_touching_nuclei
+from nuc_trans import as_segmentation, separate_touching_nuclei, erode_mask, noop_augmentation, nuc_augmentation
 
 
 class NucleusDataset(Dataset):
@@ -68,10 +68,10 @@ class NucleusDataset(Dataset):
     def __init__(
             self,
             root_dir=None,
-            stage_name= 'stage1',
-            group_name= 'train',
-            preprocess = separate_touching_nuclei,
-            transform = None):
+            stage_name='stage1',
+            group_name='train',
+            preprocess=erode_mask,
+            transform=noop_augmentation):
         """
         Args:
             root_dir (string): Directory with all the images.
@@ -80,7 +80,7 @@ class NucleusDataset(Dataset):
         """
 
         self.root_dir = root_dir
-        self.transform = transform
+        self.transform = transform()
 
         if root_dir is None:
             return
@@ -177,16 +177,26 @@ class NucleusDataset(Dataset):
     def __len__(self):
         return self.data_df.shape[0]
 
+    def apply_transform(self, transform, images):
+        trans_det = transform.to_deterministic()
+        return [numpy_to_torch(trans_det.augment_image(img)) for img in images]
+
 
     def __getitem__(self, idx):
 
         row = self.data_df.iloc[idx].to_dict()
-        if self.transform:
-            row['images'], row['masks'], row['masks_seg'], row['masks_prep'], row['masks_prep_seg'] = self.transform([row['images'], row['masks'], row['masks_seg'], row['masks_prep'], row['masks_prep_seg']])
+
+        to_transform = ['images', 'masks', 'masks_seg', 'masks_prep', 'masks_prep_seg']
+
+        img_trans = self.apply_transform(self.transform, [row[k] for k in to_transform])
+
+        for i, k in enumerate(to_transform):
+            row[k] = img_trans[i]
+
         return row
 
 
-    def train_test_split(self, **options):
+    def train_test_split(self, test_transform=noop_augmentation, **options):
         """ Return a list of splitted indices from a DataSet.
         Indices can be used with DataLoader to build a train and validation set.
 
@@ -198,10 +208,11 @@ class NucleusDataset(Dataset):
         """
 
         df_train, df_test = train_test_split_sk(self.data_df, **options)
-        dset_train = NucleusDataset(transform=self.transform)
+        dset_train = NucleusDataset()
+        dset_train.transform = self.transform
         dset_train.data_df = df_train
 
-        dset_test = NucleusDataset(transform=self.transform)
+        dset_test = NucleusDataset(transform=test_transform)
         dset_test.data_df = df_test
 
         return dset_train, dset_test
