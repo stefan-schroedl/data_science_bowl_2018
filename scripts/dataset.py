@@ -2,32 +2,21 @@
 
 from __future__ import division
 import os
-import torch
 import pandas as pd
 import numpy as np
 import sys
-import random
-import math
-from functools import reduce
 import logging
 from glob import glob
 
-from torchvision import transforms, utils
-from torch.autograd import Variable
 from torch.utils.data import Dataset
-from torch.utils.data.sampler import SubsetRandomSampler
 
 from PIL import Image
 
-import skimage
-from skimage import img_as_float, img_as_ubyte
+from skimage import img_as_ubyte
 from skimage.io import imread
 from skimage.color import rgb2grey
 
-import sklearn
 from sklearn.model_selection import train_test_split as train_test_split_sk
-
-import scipy
 
 import cv2
 
@@ -48,7 +37,7 @@ class NucleusDataset(Dataset):
         #        np.bitwise_or, [
         #            np.asarray(Image.open(c_img)) for c_img in iter(in_img_list)])).astype(np.uint8)
         #r = r / r.max()
-        return r
+        #return r
 
     @staticmethod
     def read_image(in_img_list):

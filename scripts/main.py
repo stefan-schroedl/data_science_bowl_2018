@@ -359,10 +359,27 @@ def validate(model, loader, criterion, calc_iou=False, max_clusters_for_dilation
 
         loss = criterion(pred, labels_seg)
         running_loss += loss.data[0]
+        iou = 0.0
         cnt += 1
         if calc_iou:
             pred_l, _ = torch_pred_to_np_label(pred, max_clusters_for_dilation=max_clusters_for_dilation)
-            sum_iou += iou_metric(row['masks'].numpy().squeeze(), pred_l)
+            iou = iou_metric(row['masks'].numpy().squeeze(), pred_l)
+            if 0:
+                logging.info('%s\t%f\t%f' % (row['id'], loss.data[0], iou))
+                if row['id'][0] == 'bbfc4aab5645637680fa0ef00925eea733b93099f1944c0aea09b78af1d4eef2':
+                    fig, ax = plt.subplots(1, 2, figsize=(50, 50))
+                    plt.tight_layout()
+                    ax[0].imshow(torch_to_numpy(img.data[0]))
+                    ax[1].imshow(torch_to_numpy(labels_seg.data))
+                    fig.savefig('img_debug_gt.png')
+                    plt.close()
+                    fig, ax = plt.subplots(1, 2, figsize=(50, 50))
+                    ax[0].imshow(torch_to_numpy(pred.data[0]))
+                    ax[1].imshow(pred_l)
+                    fig.savefig('img_debug.png')
+                    plt.close()
+
+            sum_iou += iou
     l = running_loss / cnt
     iou = sum_iou / cnt
     return l, iou
@@ -562,7 +579,7 @@ def train_cnn (train_loader,
 
             validated = False
             for i in range(it, it + num_acc):
-                
+
                 if i % eval_every == 0 and not validated:
                     l, iou = validate(model, valid_loader, criterion, True)
                     insert_log(i, 'valid_loss', l)
