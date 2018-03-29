@@ -8,6 +8,7 @@ import configargparse
 import copy
 import timeit
 import time
+import time
 import logging
 import math
 import re
@@ -206,8 +207,6 @@ parser.add('--resume', default='', type=str, metavar='PATH',
            help='path to latest checkpoint [default: %(default)s]')
 parser.add('--override-model-opts', type=csv_list, default='override-model-opts,resume,experiment,out-dir,save-every,print-every,eval-every,scheduler,log-file',
            help='when resuming, change these options [default: %(default)s]')
-parser.add('--evaluate', '-E', dest='evaluate', action='store_true',
-           help='evaluate model on validation set')
 parser.add('--calc-iou', type=int, default=0, help='calculate iou and exit')
 parser.add('--calc-pred', type=int, default=0, help='calculate predictions and exit')
 parser.add('--predictions-file', type=str, default='predictions.csv', help='file name for predictions output')
@@ -333,8 +332,11 @@ def torch_pred_to_np_label(pred, sz=2, max_clusters_for_dilation=100, thresh=0.0
 
 
 def validate(model, loader, criterion, calc_iou=False, max_clusters_for_dilation=100):
-    #model.eval()
-    model.train() # for some reason, batch norm doesn't work properly with eval mode!!!
+
+    time_start = time.time()
+
+    model.eval()
+    #model.train() # for some reason, batch norm doesn't work properly with eval mode!!!
 
     if isinstance(criterion, nn.BCEWithLogitsLoss):
         criterion.weight = torch.ones(1) # reset weight if it was changed!
@@ -382,7 +384,9 @@ def validate(model, loader, criterion, calc_iou=False, max_clusters_for_dilation
             sum_iou += iou
     l = running_loss / cnt
     iou = sum_iou / cnt
-    return l, iou
+
+    time_end = time.time()
+    return l, iou, time_end - time_start
 
 
 def train_knn(
@@ -471,6 +475,10 @@ def train_cnn (train_loader,
                print_every,
                save_every,
                global_state):
+
+    time_start = time.time()
+    time_val = 0.0
+    n_val = 0
 
     is_lbfgs = global_state['args'].optim == 'lbfgs'
     accum_total = global_state['args'].grad_accum
@@ -581,7 +589,9 @@ def train_cnn (train_loader,
             for i in range(it, it + num_acc):
 
                 if i % eval_every == 0 and not validated:
-                    l, iou = validate(model, valid_loader, criterion, True)
+                    l, iou, t = validate(model, valid_loader, criterion, True)
+                    time_val += t
+                    n_val += len(valid_loader)
                     insert_log(i, 'valid_loss', l)
                     insert_log(i, 'valid_iou', iou)
                     validated = True
@@ -612,7 +622,9 @@ def train_cnn (train_loader,
 
             global_state['it'] += num_acc
 
-    return global_state['it'], global_state['best_loss'], global_state['best_it'], loss_stats.avg, iou_stats.avg
+    time_end = time.time()
+    time_total = time_end - time_start
+    return global_state['it'], global_state['best_loss'], global_state['best_it'], loss_stats.avg, iou_stats.avg, time_total, time_val, n_val
 
 
 def baseline(
@@ -696,8 +708,8 @@ def main():
 
     elif args.model == 'cnn':
         trainer = train_cnn
-        model = CNN(32)
-        #model = UNetClassify(layers=4, init_filters=32)
+        #model = CNN(32)
+        model = UNetClassify(layers=4, init_filters=32)
         if args.weight_init != 'default':
            init_weights(model, args.weight_init)
     else:
@@ -792,11 +804,11 @@ def main():
         train_loader.transform = noop_augmentation()
 
     if args.calc_iou > 0:
-        loss, iou = validate(model, train_loader, criterion, calc_iou=True, max_clusters_for_dilation=1e20)
+        loss, iou, _ = validate(model, train_loader, criterion, calc_iou=True, max_clusters_for_dilation=1e20)
         msg = 'train: loss = %f, iou = %f' % (loss, iou)
         logging.info(msg)
         print msg
-        loss, iou = validate(model, valid_loader, criterion, calc_iou=True, max_clusters_for_dilation=1e20)
+        loss, iou, _ = validate(model, valid_loader, criterion, calc_iou=True, max_clusters_for_dilation=1e20)
         msg = 'test: loss = %f, iou = %f' % (loss, iou)
         logging.info(msg)
         print msg
@@ -804,7 +816,8 @@ def main():
 
     if args.calc_pred > 0:
         # calculate predictions
-        model.train() # for some reason, batch norm doesn't work properly with eval mode!!!
+        model.eval()
+        #model.train() # for some reason, batch norm doesn't work properly with eval mode!!!
         thresh = 0.0
         preds = []
         for i in tqdm(range(len(dset.data_df))):
@@ -838,11 +851,6 @@ def main():
 
         return
 
-
-    if args.evaluate:
-        validate(model, valid_loader, criterion)
-        return
-
     #l, iou = validate(model, valid_loader, criterion, True)
     #logging.info('initial validation: %.3f %.3f\n' % (l, iou))
     #global_state['best_loss'] = l
@@ -860,12 +868,21 @@ def main():
     recovered_ckpt = None
     recovery_attempts = 0
 
+
     for epoch in range(args.epochs):
         try:
-            it, best_loss, best_it, epoch_loss, epoch_iou = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
+            it, best_loss, best_it, epoch_loss, epoch_iou, time_total, time_val, n_val = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
 
-            logging.info('[%d, %d]\ttrain loss in epoch: %.3f, iou=%.3f' %
-                         (epoch, global_state['it'], epoch_loss, epoch_iou))
+            logging.info('[%d, %d]\tepoch: train loss %.3f, iou=%.3f, total time=%d, val time=%d, it/s=%.2f, train it/s=%.2f, valid it/s=%.2f' %
+                         (epoch,
+                          global_state['it'],
+                          epoch_loss,
+                          epoch_iou,
+                          time_total,
+                          time_val,
+                          1.0 * time_total / len(train_loader),
+                          1.0 * (time_total - time_val) / len(train_loader),
+                          1.0 * time_val / n_val if n_val > 0 else 0.0))
 
 
             # check for blowup

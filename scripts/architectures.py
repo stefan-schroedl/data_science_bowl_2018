@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from torch.nn import init
 from torch.nn.utils import weight_norm
 
+import groupnorm
 
 def init_weights(net, method='kaiming'):
     if method not in ['kaiming', 'xavier']:
@@ -105,29 +106,35 @@ class CNN(nn.Module):
             nn.Conv2d(3, 3, stride=1, kernel_size=1, padding=0))
 
         self.layer1 = nn.Sequential(
-            nn.BatchNorm2d(15, affine=affine, momentum=mom),
+            #nn.BatchNorm2d(15, affine=affine, momentum=mom),
+            GroupNorm(15,15),
             nn.Conv2d(15, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.MaxPool2d(3, stride=1, padding=1))
         self.layer2 = nn.Sequential(
-            nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
+            #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
+            GroupNorm(num_filters, num_filters // 2),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.MaxPool2d(3, stride=1, padding=1))
         self.layer3 = nn.Sequential(
-            nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
+            #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
+            GroupNorm(num_filters, num_filters // 2),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU())
         self.layer4 = nn.Sequential(
-            nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
+            #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
+            GroupNorm(num_filters, num_filters // 2),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU())
         self.layer5 = nn.Sequential(
-            nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
+            #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
+            GroupNorm(num_filters, num_filters // 2),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU())
         self.layer6 = nn.Sequential(
-            nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
+            #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
+            GroupNorm(num_filters, num_filters // 2),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU())
 
@@ -191,14 +198,18 @@ class UNetBlock(nn.Module):
         conved2 = self.activation(conved2)
         conved2 = self.norm2(conved2)
         return conved2
-        
+
+# note: python pickle doesn't like lambdas!
+def noop(x):
+    return x
+
 class UNetDownBlock(UNetBlock):
     def __init__(self, filters_in, filters_out, pool=True):
         super(UNetDownBlock, self).__init__(filters_in, filters_out)
         if pool:
             self.pool = nn.MaxPool2d(2)
         else:
-            self.pool = lambda x: x
+            self.pool = noop
         
     def forward(self, x):
         return self.pool(super(UNetDownBlock, self).forward(x))
