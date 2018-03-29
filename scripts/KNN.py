@@ -2,14 +2,17 @@ from sklearn.neighbors import KNeighborsClassifier
 import numpy as np
 from sklearn.feature_extraction.image import extract_patches_2d
 from sklearn.feature_extraction.image import reconstruct_from_patches_2d
+import imutils
 import cv2
 import faiss   
 from transform import random_rotate90_transform1
 class KNN():
-    def __init__(self,n=5,hist_n=50,patch_size=13,sample=400,gauss_blur=False,similarity=False,normalize=True,super_boundary_threshold=20,erode=False):
+    def __init__(self,n=5,hist_n=50,patch_size=13,sample=400,gauss_blur=False,similarity=False,normalize=True,super_boundary_threshold=20,erode=False,match_method='hist'):
+        print "SAMPLE IS ",sample, "SHOULD BE ~400?"
         print "TRY TO START WITH SUPER BOUNDARY INSTEAD OF JUST BOUNDARY>????"
         print "http://answers.opencv.org/question/60974/matching-shapes-with-hausdorff-and-shape-context-distance/"
         print "LOG SIMILAR IMAGES!!!"
+        print "TRY TO RECONSTRUCT RECURSIVELY?"
         #sys.exit(1)
         self.n=n # nearest patches to average
         self.nn=hist_n # nearest images to use as training
@@ -35,10 +38,14 @@ class KNN():
         self.gkernel=gkernel
         self.similarity=similarity
         self.gauss_blur=gauss_blur
-        self.hist_match=True
+        self.match_method=match_method
         self.img_sig=set([])
         self.mask_contours=[]
         self.erode_training_masks=erode
+        self.unique_patches=[]
+        self.unique_patches_idxs=[]
+        self.top_patches=15
+        self.similar_patches_cutoff=1
 
     def color_check(self,img):
         if img.std(axis=2).mean()<0.01:
@@ -79,8 +86,8 @@ class KNN():
             super_boundary_2 += boundary_thresh/255
         #print "X",super_boundary_2.max()
         super_boundary_2 = ((super_boundary_2>1)*255).astype(np.uint8)
-        cv2.imshow('sup 2',np.concatenate((super_boundary_2,mask_seg[:,:,0])))
-        cv2.waitKey(3000)
+        #cv2.imshow('sup 2',np.concatenate((super_boundary_2,mask_seg[:,:,0])))
+        #cv2.waitKey(3000)
         boundary = cv2.Laplacian(mask_seg,cv2.CV_8U,ksize=3)
         boundary = boundary.reshape(boundary.shape[0],boundary.shape[1],1)
         assert(boundary.max()<=255)
@@ -126,12 +133,76 @@ class KNN():
         self.histograms.append(self.get_hist(img))
         self.faiss_model=None
 
+        
+        data_patches=self.get_top_patches(img,how_many=-1)
+        #add the labels
+        self.unique_patches_idxs.append([len(self.unique_patches_idxs)]*data_patches.shape[0])
+        #add the patches
+        self.unique_patches.append(data_patches)
+
+    def get_top_patches(self,img,how_many=None):
+        if how_many==None:
+            how_many=self.sample
+        #get patches for similarity compare
+        data_patches=None
+        if how_many>0:
+            data_patches = extract_patches_2d(img, (self.patch_size,self.patch_size) ,random_state=1000, max_patches=how_many).astype(np.float64)
+        else:
+            data_patches = extract_patches_2d(img, (self.patch_size,self.patch_size) ,random_state=1000).astype(np.float64)
+        data_patches = data_patches.reshape(data_patches.shape[0],-1)
+        stds=data_patches.std(axis=1).argsort()[-self.top_patches:]
+        data_patches = data_patches.take(stds,axis=0)
+        return data_patches/255
+
+    def similar_by_patches(self,img):
+        top_patches = self.get_top_patches(img)
+        similar_images_idxs=[]
+        print "SEARCH NEARTEST PATCHES"
+        hits={}
+        hits_full={}
+        nearest_wds=self.unique_model.search(top_patches.astype(np.float32), (self.n*max(self.top_patches,4))/4)
+	for x in xrange(top_patches.shape[0]):
+	    idxs=nearest_wds[1][x]
+	    dists=nearest_wds[0][x]
+            print dists.min(),dists.mean(),dists.max()
+            #idxs=idxs[idxs>=0]
+            for y in xrange(len(idxs)):
+                idx=idxs[y]
+                if idx<0:
+                    continue
+                dist=dists[y]
+                idx=self.unique_patches_idxs_numpy[idx]
+                if dist<self.similar_patches_cutoff:
+                    if idx not in hits:
+                        hits[idx]=0
+                    hits[idx]+=1
+                if idx not in hits_full:
+                    hits_full[idx]=0
+                hits_full[idx]+=1
+
+        if len(hits)==0:
+            hits=hits_full # back off 'gracefully'
+        keys=[]
+        for key in hits:
+            if len(keys)>=self.nn:
+                break
+            keys.append((hits[key],key))
+        keys.sort(reverse=True)
+
+        similar_img_idxs=[ k[1] for k in keys ]
+        return similar_img_idxs
+
+        
     def fit(self):
         #generate the histogram index
         self.histograms_numpy = np.reshape(self.histograms, newshape=(len(self.histograms), 256*3))
         self.histogram_model = faiss.IndexFlatL2(256*3)
         self.histogram_model.add(self.histograms_numpy.astype(np.float32))
-
+        #make unique model 
+        self.unique_patches_idxs_numpy = np.concatenate(self.unique_patches_idxs,axis=0)
+        self.unique_model = faiss.IndexFlatL2(self.patch_size*self.patch_size*3)
+        self.unique_patches_numpy = np.concatenate(self.unique_patches,axis=0) # np.reshape(self.unique_patches, newshape=(len(self.unique_patches_idxs),self.patch_size*self.patch_size*3))
+        self.unique_model.add(self.unique_patches_numpy.astype(np.float32))
 
     def resize(self,img,f):
         return cv2.resize(img.astype(np.uint8), (0,0), fx=f, fy=f) 
@@ -271,8 +342,6 @@ class KNN():
         cv2.imshow('reconstructed / orig + 2 / orig',np.concatenate((reconstructed[:,:,None],super_boundary[:,:,None],super_boundary_orig[:,:,None]),axis=1).astype(np.uint8))
         cv2.waitKey(10000)
         return reconstructed
-
-
 
     def label(self,img,seg):
         img[0,:]=255
@@ -420,35 +489,60 @@ class KNN():
 
         #get the clusters from the mask
 
+
+    def similar_by_hist(self,img):
+        hist = self.get_hist(img)
+        similar_images_idxs=[]
+        print "SEARCH NEARTEST HIST"
+        nearest_wds=self.histogram_model.search(hist[None,:].astype(np.float32), self.nn)
+        for x in xrange(len(nearest_wds[1][0])):
+            idx=nearest_wds[1][0][x]
+            if idx==-1:
+                continue
+            dist=nearest_wds[0][0][x]
+            if dist<self.cutoff:
+                similar_images_idxs.append(idx)
+        if len(similar_images_idxs)==0:
+            similar_images_idxs=nearest_wds[1][0]
+        return similar_images_idxs
+
+
+
     def predict(self,img):
+        print "CONVEX HULL CHECK"
+        print "SHRINK ALL BOUNDARIES, ESPECIALLY THOSE WITH OTHER MASKS NEARBY! OVERLAP -> 0 PREDICTION"
+        print "TODO: subtract super boundaries from regular"
         print "START PREDICT"
 	img = (img.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
 
+        similar_contours = []
+
+        similar_hist_images=[]
+        similar_hist_images_idxs=self.similar_by_hist(img)
+        for idx in similar_hist_images_idxs:
+            img2,_,_,_ = self.images[idx]
+            similar_hist_images.append(cv2.resize(img2, (256, 256)))
+            #similar_hist_images.append(imutils.resize(img2, height=256,width=256))
+            #cv2.imshow("y",img2)
+            #cv2.waitKey(2000)
+
+        similar_patch_images=[]
+        similar_patch_images_idxs=self.similar_by_patches(img)
+        for idx in similar_patch_images_idxs:
+            img2,_,_,_ = self.images[idx]
+            similar_patch_images.append(cv2.resize(img2, (256, 256)))
+            #similar_patch_images.append(imutils.resize(img2, height=256).astype(np.uint8))
+            #cv2.imshow("x",similar_patch_images[-1])
+            #cv2.waitKey(2000)
+
         patch_model = None
         super_boundary_model = None
-        similar_contours = []
-        if self.hist_match:
-            hist = self.get_hist(img)
-            print "SEARCH NEARTEST HIST"
-            nearest_wds=self.histogram_model.search(hist[None,:].astype(np.float32), self.nn)
-            print "SEARCH NEARTEST HIST - DONE"
-            images_to_use=[]
-            for x in xrange(len(nearest_wds[1][0])):
-	        idx=nearest_wds[1][0][x]
-                if idx==-1:
-                    continue
-                dist=nearest_wds[0][0][x]
-                if dist<self.cutoff:
-                    images_to_use.append(idx)
-            if len(images_to_use)>0:
-                patch_model,self.super_boundary_model, self.super_boundary_2_model = self.make_index(images_to_use) #,use_all=True)
-                #for idx in images_to_use:
-                #    if idx>=0:
-                #        #similar_contours.append(self.mask_contours[idx])
-                #similar_contours = [item for sublist in similar_contours for item in sublist]
-            else:
-                patch_model,self.super_boundary_model, self.super_boundary_2_model = self.make_index(nearest_wds[1][0])
-                #similar_contours = [item for sublist in self.mask_contours for item in sublist]
+        if self.match_method=='hist':
+            patch_model,self.super_boundary_model, self.super_boundary_2_model = self.make_index(similar_hist_images_idxs) #,use_all=True)
+        elif self.match_method=='patch':
+            patch_model,self.super_boundary_model, self.super_boundary_2_model = self.make_index(similar_patch_images_idxs) #,use_all=True)
+        else:
+            print "INVALID MODEL TYPE"
 
         if patch_model==None:
             if self.faiss_model==None:
@@ -507,12 +601,12 @@ class KNN():
         clustered=self.by_cluster(img,reconstructed,similar_contours)
 
         _,reconstructed_super_boundary_thresh = cv2.threshold(reconstructed_super_boundary,self.super_boundary_threshold,255,cv2.THRESH_BINARY)
-        l=self.label(reconstructed_super_boundary_thresh,reconstructed_mask).astype(np.int32)-1 #background from 1 -> 0
-        l2=cv2.watershed(img,l+1)-1
-        l2[l2<0]=0
-        l2=l2.astype(np.uint8)
+        labeled=self.label(reconstructed_super_boundary_thresh,reconstructed_mask).astype(np.int32)-1 #background from 1 -> 0
+        labeled2=cv2.watershed(img,labeled+1)-1
+        labeled2[labeled2<0]=0
+        labeled2=labeled2.astype(np.uint8)
         #lets try to do something one cluster at a time?
-        #cv2.imshow('watershed',l2)
+        #cv2.imshow('watershed',labeled2)
         #cv2.waitKey(3)
         print "SHRINK TRAINING MASKS?????!?!??!?!?!?!?"
         print "TODO ADD THIS ON A PER TILE BASIS? NORMALIZE THERE?"
@@ -526,7 +620,21 @@ class KNN():
         enhanced_label[enhanced_label<0]=0
         enhanced_label=enhanced_label.astype(np.uint8)
         #cv2.imshow('en',enhanced_thresh)
-        cv2.imshow('color lab l',np.concatenate((self.color_label(l,reconstructed_mask),self.color_label(l2,reconstructed_mask),self.color_label(enhanced_label,reconstructed_mask),img),axis=1))
+        cv2.imshow('color lab l',np.concatenate((self.color_label(labeled,reconstructed_mask),self.color_label(labeled2,reconstructed_mask),self.color_label(enhanced_label,reconstructed_mask),img),axis=1))
         cv2.waitKey(2)
-        return reconstructed_img,reconstructed_mask,reconstructed_boundary,reconstructed_blend,reconstructed_super_boundary,reconstructed_super_boundary_2,l,l2,enhanced_label,clustered
-        
+        d={}
+        d['img']=reconstructed_img
+        d['seg']=reconstructed_mask
+        d['boundary']=reconstructed_boundary
+        d['blend']=reconstructed_blend
+        d['super_boundary']=reconstructed_super_boundary
+        d['super_boundary_2']=reconstructed_super_boundary_2
+        d['labeled']=labeled
+        d['labeled2']=labeled2
+        d['enhanced_label']=enhanced_label
+        d['clustered']=clustered
+        d['similar_patch_images']=similar_patch_images
+        d['similar_hist_images']=similar_hist_images
+        return d 
+    
+    

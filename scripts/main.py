@@ -5,6 +5,7 @@ import shutil
 from tqdm import tqdm
 from sklearn.neighbors import KNeighborsClassifier
 from KNN import *
+from GUESS import *
 #torch imports
 #from main import *
 import torch
@@ -150,6 +151,8 @@ parser.add('--log-file', help='write logging output to file')
 parser.add('--patch-size', type=int, default=13, help="patch size")
 parser.add('--knn-n', type=int, default=5, help="average over n samples")
 parser.add('--super-boundary-threshold', type=int, default=20, help="threshold")
+parser.add('--prefix', type=str, default="", help="o")
+parser.add('--knn-method', type=str, default="hist", help="hist or patch")
 
 def save_checkpoint(
         model,
@@ -222,6 +225,51 @@ def load_checkpoint(model, optimizer, args, fname='model_best.pth.tar'):
 def torch_to_numpy(t,scale=255):
     return (t.numpy()[0].transpose(1,2,0)*scale).astype(np.uint8)
 
+
+def imgfy(img):
+    if img.ndim==2:
+        img=img[:,:,None]
+    if img.shape[2]==1:
+        img=cv2.cvtColor(img,cv2.COLOR_GRAY2RGB)
+    return img
+
+def hcat(imgs):
+    if len(imgs)==0:
+        return np.array([]).astype(np.uint8)
+    height,width = imgs[0].shape[:2]
+    v_border=np.full((height,5,3),255).astype(np.uint8)
+    to_cat=[]
+    for img in imgs:
+        to_cat.append(imgfy(img))
+        to_cat.append(v_border)
+    return np.concatenate(to_cat,axis=1)
+
+def vcat(imgs):
+    if len(imgs)==0:
+        return np.array([]).astype(np.uint8)
+    height,width = imgs[0].shape[:2]
+    h_border=np.full((5,width,3),255).astype(np.uint8)
+    to_cat=[]
+    for img in imgs:
+        to_cat.append(imgfy(img))
+        to_cat.append(h_border)
+    return np.concatenate(to_cat,axis=0)
+   
+def stack_images(imgs,w=5):
+    s=[]
+    c=[]
+    for x in xrange(len(imgs)):
+        if len(c)==w:
+            s.append(hcat(c))
+            c=[]
+        c.append(imgs[x])
+    if len(c)>0:
+        while len(c)!=w:
+            c.append(imgs[-1]*0)
+        s.append(hcat(c))
+    return vcat(s)
+
+
 valn=0
 iou_pipe=[]
 iou_l=[]
@@ -238,42 +286,45 @@ def validate_knn(model, loader, criterion):
         #    continue
         #if i>0:
         #    sys.exit(1)
-        p_img,p_seg,p_boundary,p_blend,p_super_boundary,p_super_boundary_2,l,l2,el,clus=model.predict(img)
-        torch_p_seg = torch.from_numpy(p_seg[None,:,:].astype(np.float)/255).float()
+        p=model.predict(img)
+        #p_img,p_seg,p_boundary,p_blend,p_super_boundary,p_super_boundary_2,l,l2,el,clus=model.predict(img)
+
+        torch_p_seg = torch.from_numpy(p['seg'][None,:,:].astype(np.float)/255).float()
         #torch_p_boundary = torch.from_numpy(p_boundary[None,:,:].astype(np.float)/255).float()
         #torch_p_blend = torch.from_numpy(p_blend[None,:,:].astype(np.float)/255).float()
-        _,p_super_boundary_thresh = cv2.threshold(p_super_boundary,args.super_boundary_threshold,255,cv2.THRESH_BINARY)
-        _,p_super_boundary_2_thresh = cv2.threshold(p_super_boundary_2,20,255,cv2.THRESH_BINARY)
+        _,p_super_boundary_thresh = cv2.threshold(p['super_boundary'],args.super_boundary_threshold,255,cv2.THRESH_BINARY)
+        _,p_super_boundary_2_thresh = cv2.threshold(p['super_boundary_2'],20,255,cv2.THRESH_BINARY)
         super_boundary_combined = np.concatenate((0*p_super_boundary_thresh[:,:,None],p_super_boundary_thresh[:,:,None],p_super_boundary_2_thresh[:,:,None]),axis=2)
-        border=np.full((p_img.shape[0],5,3),255).astype(np.uint8)
-        up=np.concatenate((torch_to_numpy(img),border,p_img,border,cv2.cvtColor(p_boundary,cv2.COLOR_GRAY2RGB),border,cv2.cvtColor(p_blend,cv2.COLOR_GRAY2RGB),border,super_boundary_combined),axis=1)
-        borderh=np.full((5,up.shape[1],3),255).astype(np.uint8)
-        down=cv2.cvtColor(np.concatenate((torch_to_numpy(labels_seg),border[:,:,:1],p_seg[:,:,None],border[:,:,:1],p_super_boundary_thresh[:,:,None],border[:,:,:1],p_super_boundary[:,:,None],border[:,:,:1],4*p_super_boundary_2[:,:,None]),axis=1),cv2.COLOR_GRAY2RGB)
-        whole=np.concatenate((up,borderh,down),axis=0)
-        whole[:,p_img.shape[1]:p_img.shape[1]+5,:2]=0
+        up=hcat([torch_to_numpy(img),p['img'],p['boundary'],p['blend'],super_boundary_combined])
+        down=hcat([torch_to_numpy(labels_seg),p['seg'],p_super_boundary_thresh,p['super_boundary'],4*p['super_boundary_2']])
+        whole=vcat([up,down])
+        whole[:,p['img'].shape[1]:p['img'].shape[1]+5,:2]=0
         #cv2.imshow('wtf',whole)
-        cv2.imwrite('%d_%d.png' % (valn,i),whole)
+        cv2.imwrite(args.prefix+'%d_%d.png' % (valn,i),whole)
+        cv2.imwrite(args.prefix+'%d_%d_patch.png' % (valn,i),stack_images(p['similar_patch_images']))
+        cv2.imwrite(args.prefix+'%d_%d_hist.png' % (valn,i),stack_images(p['similar_hist_images']))
         #cv2.imshow('pbound',p_boundary)
 
         #get iou using parametric
-        _,p_seg_thresh = cv2.threshold(p_seg,20,255,cv2.THRESH_BINARY)
+        _,p_seg_thresh = cv2.threshold(p['seg'],20,255,cv2.THRESH_BINARY)
         p_seg_thresh/=255
         try:
             img_th = parametric_pipeline(p_seg_thresh.astype(np.uint8), circle_size=4)
-            iou_pipe.append(iou_metric(img_th,torch_to_numpy(labels,scale=1)))
+            iou_pipe.append(iou_metric(torch_to_numpy(labels,scale=1),img_th))
         except:
             print "Failed to run pipeline :("
             iou_pipe.append(0)
         #cv2.imwrite('%d_%d_p_seg_thresh.png' % (valn,i),p_seg_thresh*255)
         #cv2.imwrite('%d_%d_img_th.png' % (valn,i),(img_th*255).astype(np.uint8))
 
-        iou_l.append(iou_metric(l,torch_to_numpy(labels,scale=1)))
-        iou_el.append(iou_metric(el,torch_to_numpy(labels,scale=1)))
-        iou_l2.append(iou_metric(l2,torch_to_numpy(labels,scale=1)))
-        iou_clus.append(iou_metric(clus,torch_to_numpy(labels,scale=1)))
+        print "TODO : IOU METRIC (GT, PRED)"
+        iou_l.append(iou_metric(torch_to_numpy(labels,scale=1),p['labeled']))
+        iou_el.append(iou_metric(torch_to_numpy(labels,scale=1),p['enhanced_label']))
+        iou_l2.append(iou_metric(torch_to_numpy(labels,scale=1),p['labeled2']))
+        iou_clus.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered']))
         s="\t".join(map(lambda x : str(x) , ["IOU",iou_pipe[-1],iou_l[-1],iou_l2[-1],iou_el[-1],iou_clus[-1],sum(iou_pipe)/len(iou_pipe),sum(iou_l)/len(iou_l),sum(iou_l2)/len(iou_l2),sum(iou_el)/len(iou_el),sum(iou_clus)/len(iou_clus)]))
         print s
-        f=open('%d_%d.txt' % (valn,i),'w')
+        f=open(args.prefix+'%d_%d.txt' % (valn,i),'w')
         f.write(s+'\n')
         f.close()
 
@@ -467,7 +518,7 @@ def main():
     global it, best_it, best_loss, LOG, args
     args = parser.parse_args()
 
-    if args.model not in ['knn','cnn']:
+    if args.model not in ['knn','cnn','guess' ]:
         print "Only supported models are cnn or knn"
         sys.exit(1)
 
@@ -505,8 +556,10 @@ def main():
     scheduler=None
     if args.model in ('knn',):
         trainer=train_knn
-        model=KNN(patch_size=args.patch_size,n=args.knn_n,super_boundary_threshold=args.super_boundary_threshold)
-
+        model=KNN(patch_size=args.patch_size,n=args.knn_n,super_boundary_threshold=args.super_boundary_threshold,match_method=args.knn_method)
+    if args.model in ('guess'):
+        trainer=train_knn
+        model=GUESS()
     if args.model in ('cnn',):
         trainer=train_cnn
         model=CNN()
