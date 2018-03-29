@@ -7,22 +7,33 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 
-from utils import get_history_log, csv_list
+from utils import get_history_log, csv_list, moving_average
 import architectures
 from architectures import CNN
 
 def filter_hist(h, min_it, max_it, min_y, max_y):
-    #its = [i for v,i in zip(h[0], h[1]) if i >= min_it and i <= max_it and v >= min_y and v <= max_y]
-    #vs  = [v for v,i in zip(h[0], h[1]) if i >= min_it and i <= max_it and v >= min_y and v <= max_y]
     its = [i for v,i in zip(h[0], h[1]) if i >= min_it and i <= max_it]
     vs  = [min(max(v, min_y), max_y) for v,i in zip(h[0], h[1]) if i >= min_it and i <= max_it]
 
     return vs, its
 
-parser = configargparse.ArgumentParser(description='compare mutliple graphs')
+def parse_what_dict(specs):
+    what_dict = {}
+    for spec in specs.split(';'):
+        l,r = spec.split(':')
+        if r is None:
+            raise ValueError('wrong spec: %s' % spec)
+        k,fn = r.split(',')
+        if fn is None or fn not in ['min', 'max', 'mean']:
+            raise ValueError('wrong spec: %s' % spec)
+        what_dict[l] = (k, fn)
+    return what_dict
 
+parser = configargparse.ArgumentParser(description='compare multiple histories')
+parser.add('--config', '-c', is_config_file=True, help='config file path [default: %(default)s])')
 parser.add('files', nargs='+', type=str, help='comma-delimited list of checkpoint files')
 parser.add('--out', '-o', help='file name for output image', default='compare.png')
+parser.add('--crit-dict', '-d', help='dictionary of logged measures: abbrev:loggged_key,agg_func;...',default='tr:train_loss,min;ts:valid_loss,min;tr_f:final_train_loss,min;w:bp_wt,mean;ts_iou:valid_iou,max;tr_iou:train_iou,max;tr_e:epoch_train_loss,min;lr:lr,mean')
 parser.add('--what', '-w', type=csv_list, default='tr,tr_f,ts', help='list of plot types (tr, ts, tr_f, w, iou)')
 parser.add('--grad', '-g', type=int, default=1, help='plot gradients?')
 parser.add('--max-iter', '-M', default=100000, type=int, help='maximum iteration')
@@ -43,7 +54,7 @@ exps = []
 
 colors = ['b', 'g', 'r', 'c', 'm', 'y', 'k']
 
-what_dict = {'tr':'train_loss', 'ts':'valid_loss', 'tr_f':'final_train_loss', 'w':'bp_wt', 'ts_iou':'valid_iou', 'tr_iou':'train_iou', 'tr_e':'epoch_train_loss', 'lr':'lr'}
+what_dict = parse_what_dict(args.crit_dict)
 
 for k in args.what:
     if not k in what_dict:
@@ -78,8 +89,18 @@ for exp_name in hist:
         if k == 'grad':
             next
         try:
-            v,i = filter_hist(get_history_log(what_dict[k], hist[exp_name]), args.min_iter, args.max_iter, args.min_y, args.max_y)
-            ax0.plot(i, v, colors[c], label=k + ' ' + exp_name)
+            h = get_history_log(what_dict[k][0], hist[exp_name])
+            n = min(5, len(h[0]))
+            m = moving_average(h[0], n)
+            best = 0.0
+            if what_dict[k][1] == 'min':
+                best = min(m)
+            elif what_dict[k][1] == 'max':
+                best = max(m)
+            else:
+                best = mean(m)
+            v,i = filter_hist(h, args.min_iter, args.max_iter, args.min_y, args.max_y)
+            ax0.plot(i, v, colors[c], label='%s %s [%.3f]' % (k, exp_name, best))
             c = (c + 1) % len(colors)
         except:
             pass

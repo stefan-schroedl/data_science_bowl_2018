@@ -21,6 +21,11 @@ import torchvision
 from torchvision.transforms import ToTensor, ToPILImage
 
 
+def moving_average(a, n=3):
+    ret = np.cumsum(a, dtype=float)
+    ret[n:] = ret[n:] - ret[:-n]
+    return ret[n - 1:] / n
+        
 def save_object(obj, filename):
     with open(filename, 'wb') as output:  # Overwrites any existing file.
         pickle.dump(obj, output, pickle.HIGHEST_PROTOCOL)
@@ -163,7 +168,11 @@ def is_inverted(img,invert_thresh_pd=10.0):
 
 
 def torch_to_numpy(t):
-    return (t.numpy().squeeze().transpose(1,2,0)*255).astype(np.uint8)
+    t = t.numpy().squeeze()
+    if t.ndim > 2:
+        t = t.transpose(1,2,0)
+    t = (t/t.max()*255).astype(np.uint8)
+    return t
 
 #def numpy_to_torch(n):
 #    return torch.from_numpy(np.transpose(n, (2, 0, 1))).unsqueeze(0).float()

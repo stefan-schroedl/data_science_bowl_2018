@@ -785,13 +785,19 @@ def main():
     stratify = None
     if args.stratify > 0:
         stratify = dset.data_df['images'].map(lambda x: '{}'.format(x.size))
-    train_dset, valid_dset = dset.train_test_split(test_size=args.valid_fraction, random_state=1, shuffle=True, stratify=stratify, test_transform=noop_augmentation)
+    train_dset, valid_dset = dset.train_test_split(test_size=args.valid_fraction, random_state=args.random_seed, shuffle=True, stratify=stratify, test_transform=noop_augmentation)
     train_loader = DataLoader(train_dset, batch_size=1, shuffle=True)
     valid_loader = DataLoader(valid_dset, batch_size=1, shuffle=True)
+    if args.calc_iou > 0 or args.calc_pred > 0:
+        train_loader.transform = noop_augmentation()
 
     if args.calc_iou > 0:
         loss, iou = validate(model, train_loader, criterion, calc_iou=True, max_clusters_for_dilation=1e20)
-        msg = 'loss = %f, iou = %f' % (loss, iou)
+        msg = 'train: loss = %f, iou = %f' % (loss, iou)
+        logging.info(msg)
+        print msg
+        loss, iou = validate(model, valid_loader, criterion, calc_iou=True, max_clusters_for_dilation=1e20)
+        msg = 'test: loss = %f, iou = %f' % (loss, iou)
         logging.info(msg)
         print msg
         return
