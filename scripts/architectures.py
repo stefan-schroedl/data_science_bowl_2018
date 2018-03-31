@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from torch.nn import init
 from torch.nn.utils import weight_norm
 
-import groupnorm
+from groupnorm import GroupNorm
 
 def init_weights(net, method='kaiming'):
     if method not in ['kaiming', 'xavier']:
@@ -39,7 +39,7 @@ class Flatten(nn.Module):
     def forward(self, input):
         return input.view(input.size(0), -1)
 
-    
+
 class ImgModDetector(nn.Module):
     def __init__(self):
         super(ImgModDetector, self).__init__()
@@ -56,7 +56,7 @@ class ImgModDetector(nn.Module):
         mx = nn.Sequential(nn.MaxPool2d((out.size()[-2],out.size()[-1])))
         out = mx(out).squeeze(-1).squeeze(-1)
         out = self.fc(out)
-        
+
         # replicate to width x height
         out = out.unsqueeze(2).unsqueeze(2).expand(-1,-1,x.size()[-2],x.size()[-1])
 
@@ -85,7 +85,7 @@ class Coarse(nn.Module):
 
         up = nn.Upsample((x.shape[-2],x.shape[-1]), mode='bilinear')
         l1out = up(l1)
-        l2out = up(l2) 
+        l2out = up(l2)
         l3out = up(l3)
         return l1out, l2out, l3out
 
@@ -99,6 +99,7 @@ class CNN(nn.Module):
         # make the bn layer usable identically for train and test!
         affine = True
         mom = 0.0
+        groups = num_filters
 
         self.color_adjust = nn.Sequential(
             nn.Conv2d(6, 3, stride=1, kernel_size=1, padding=0),
@@ -113,28 +114,28 @@ class CNN(nn.Module):
             nn.MaxPool2d(3, stride=1, padding=1))
         self.layer2 = nn.Sequential(
             #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
-            GroupNorm(num_filters, num_filters // 2),
+            GroupNorm(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.MaxPool2d(3, stride=1, padding=1))
         self.layer3 = nn.Sequential(
             #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
-            GroupNorm(num_filters, num_filters // 2),
+            GroupNorm(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU())
         self.layer4 = nn.Sequential(
             #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
-            GroupNorm(num_filters, num_filters // 2),
+            GroupNorm(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU())
         self.layer5 = nn.Sequential(
             #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
-            GroupNorm(num_filters, num_filters // 2),
+            GroupNorm(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU())
         self.layer6 = nn.Sequential(
             #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
-            GroupNorm(num_filters, num_filters // 2),
+            GroupNorm(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU())
 
@@ -156,22 +157,22 @@ class CNN(nn.Module):
         out = self.layer5(out)
         out = self.layer6(out)
         out = self.layer7(out)
-       
+
         return out
-    
+
     def get_color_adjust(self, x):
         img_tp = self.mod(x)
         img_and_type = torch.cat((x,img_tp),1)
         norm_img = self.color_adjust(img_and_type)
         return norm_img
-    
+
     def get_coarse(self, x):
         img_tp = self.mod(x)
         img_and_type = torch.cat((x,img_tp),1)
         norm_img = self.color_adjust(img_and_type)
         c1, c2, c3 = self.coarse(norm_img)
         return c1, c2, c3
-  
+
 ## UNET
 ## https://becominghuman.ai/investigating-focal-and-dice-loss-for-the-kaggle-2018-data-science-bowl-65fb9af4f36c
 ## (adapted from python 3, and gray scale images)
@@ -184,13 +185,15 @@ class UNetBlock(nn.Module):
         self.filters_in = filters_in
         self.filters_out = filters_out
         self.conv1 = nn.Conv2d(filters_in, filters_out, (3, 3), padding=1)
-        self.norm1 = nn.BatchNorm2d(filters_out)
+        #self.norm1 = nn.BatchNorm2d(filters_out)
+        self.norm1 = GroupNorm(filters_out, filters_out // 2)
         self.conv2 = nn.Conv2d(filters_out, filters_out, (3, 3), padding=1)
-        self.norm2 = nn.BatchNorm2d(filters_out)
-        
+        #self.norm2 = nn.BatchNorm2d(filters_out)
+        self.norm2 = GroupNorm(filters_out, filters_out // 2)
+
         self.activation = nn.ReLU()
-        
-    def forward(self, x):            
+
+    def forward(self, x):
         conved1 = self.conv1(x)
         conved1 = self.activation(conved1)
         conved1 = self.norm1(conved1)
@@ -210,15 +213,16 @@ class UNetDownBlock(UNetBlock):
             self.pool = nn.MaxPool2d(2)
         else:
             self.pool = noop
-        
+
     def forward(self, x):
         return self.pool(super(UNetDownBlock, self).forward(x))
-    
+
 class UNetUpBlock(UNetBlock):
     def __init__(self, filters_in, filters_out):
         super(UNetUpBlock, self).__init__(filters_in, filters_out)
         self.upconv = nn.Conv2d(filters_in, filters_in // 2, (3, 3), padding=1)
-        self.upnorm = nn.BatchNorm2d(filters_in // 2)
+        #self.upnorm = nn.BatchNorm2d(filters_in // 2)
+        self.upnorm = GroupNorm(filters_in // 2, filters_in // 2)
 
     def forward(self, x, cross_x):
         x = F.upsample(x, size=cross_x.size()[-2:], mode='bilinear')
@@ -232,7 +236,7 @@ class UNet(nn.Module):
         self.down_layers = nn.ModuleList()
         self.up_layers = nn.ModuleList()
         self.init_filters = init_filters
-        
+
         filter_size = init_filters
         for _ in range(layers - 1):
             self.down_layers.append(
@@ -247,18 +251,20 @@ class UNet(nn.Module):
             filter_size //= 2
 
         # new
-        self.squash_layer = nn.Conv2d(3, 1, stride=1, kernel_size=1, padding=0)
-        self.data_norm = nn.BatchNorm2d(1)
-        self.init_layer = nn.Conv2d(1, init_filters, (7, 7), padding=3)
+        #self.squash_layer = nn.Conv2d(3, 1, stride=1, kernel_size=1, padding=0)
+        #self.data_norm = nn.BatchNorm2d(1)
+        self.data_norm = GroupNorm(3,3)
+        self.init_layer = nn.Conv2d(3, init_filters, (7, 7), padding=3)
         self.activation = nn.ReLU()
-        self.init_norm = nn.BatchNorm2d(init_filters)
+        #self.init_norm = nn.BatchNorm2d(init_filters)
+        self.init_norm = GroupNorm(init_filters, init_filters // 2)
         self.dropout = nn.Dropout(DROPOUT)
-                
+
     def forward(self, x):
-        x = self.squash_layer(x)
+        #x = self.squash_layer(x)
         x = self.data_norm(x)
         x = self.init_norm(self.activation(self.init_layer(x)))
-        
+
         saved_x = [x]
         for layer in self.down_layers:
             saved_x.append(x)
@@ -270,13 +276,13 @@ class UNet(nn.Module):
                 x = self.dropout(x)
             x = layer(x, saved_x)
         return x
-                                  
+
 class UNetClassify(UNet):
     def __init__(self, *args, **kwargs):
         init_val = kwargs.pop('init_val', 0.5)
         super(UNetClassify, self).__init__(*args, **kwargs)
         self.output_layer = nn.Conv2d(self.init_filters, 1, (3, 3), padding=1)
-        
+
         for name, param in self.named_parameters():
             typ = name.split('.')[-1]
             if typ == 'bias':
@@ -285,9 +291,9 @@ class UNetClassify(UNet):
                     param.data.fill_(-math.log((1-init_val)/init_val))
                 else:
                     param.data.zero_()
-        
+
     def forward(self, x):
         x = super(UNetClassify, self).forward(x)
         # Note that we don't perform the sigmoid here.
-        return self.output_layer(x) 
-      
+        return self.output_layer(x)
+

@@ -12,7 +12,7 @@ import time
 import logging
 import math
 import re
-import glob
+from glob import glob
 
 from tqdm import tqdm
 
@@ -68,6 +68,7 @@ class TrainingBlowupError(Exception):
 
         # Now for your custom code...
         self.errors = errors
+
 
 def get_checkpoint_file(args, it=0):
     if it > 0:
@@ -676,9 +677,12 @@ def main():
        args.out_dir = 'experiments/%s' % args.experiment
     mkdir_p(args.out_dir)
 
-    # for later info, save the current configuration
+    # for later info, save the current configuration and source files
     if args.config is not None and os.path.isfile(args.config):
         shutil.copy(args.config, args.out_dir)
+
+    for f in glob('*.py'):
+        shutil.copy(f, args.out_dir)
 
     if args.log_file is None:
         args.log_file = os.path.join(args.out_dir, '%s.log' % args.experiment)
@@ -708,8 +712,8 @@ def main():
 
     elif args.model == 'cnn':
         trainer = train_cnn
-        #model = CNN(32)
-        model = UNetClassify(layers=4, init_filters=32)
+        model = CNN(32)
+        #model = UNetClassify(layers=4, init_filters=32)
         if args.weight_init != 'default':
            init_weights(model, args.weight_init)
     else:
@@ -859,7 +863,7 @@ def main():
     if args.resume is None:
         insert_log(0, 'valid_loss', l)
 
-    logging.info('parameters:\n')
+    logging.info('command line options:\n')
     for k in global_state['args'].__dict__:
         logging.info('> %s = %s' % (k, str(global_state['args'].__dict__[k])))
     logging.info('')
