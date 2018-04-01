@@ -11,6 +11,8 @@ from torch.nn.utils import weight_norm
 
 from groupnorm import GroupNorm
 
+INPLACE = True
+
 def init_weights(net, method='kaiming'):
     if method not in ['kaiming', 'xavier']:
         raise ValueError('no such init method: %s' % method)
@@ -67,15 +69,15 @@ class Coarse(nn.Module):
         super(Coarse, self).__init__()
         self.layer1 = nn.Sequential(
             nn.Conv2d(3, 3, stride=2, kernel_size=2, padding=0),
-            nn.ReLU(),
+            nn.ReLU(inplace=INPLACE),
             nn.MaxPool2d(3, stride=2, padding=0))
         self.layer2 = nn.Sequential(
             nn.Conv2d(3, 3, stride=2, kernel_size=2, padding=0),
-            nn.ReLU(),
+            nn.ReLU(inplace=INPLACE),
             nn.MaxPool2d(3, stride=2, padding=0))
         self.layer3 = nn.Sequential(
             nn.Conv2d(3, 3, stride=2, kernel_size=2, padding=0),
-            nn.ReLU(),
+            nn.ReLU(inplace=INPLACE),
             nn.MaxPool2d(3, stride=2, padding=0))
 
     def forward(self, x):
@@ -110,34 +112,34 @@ class CNN(nn.Module):
             #nn.BatchNorm2d(15, affine=affine, momentum=mom),
             GroupNorm(15,15),
             nn.Conv2d(15, num_filters, stride=1, kernel_size=3, padding=1),
-            nn.ReLU(),
+            nn.ReLU(inplace=INPLACE),
             nn.MaxPool2d(3, stride=1, padding=1))
         self.layer2 = nn.Sequential(
             #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
             GroupNorm(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
-            nn.ReLU(),
+            nn.ReLU(inplace=INPLACE),
             nn.MaxPool2d(3, stride=1, padding=1))
         self.layer3 = nn.Sequential(
             #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
             GroupNorm(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
-            nn.ReLU())
+            nn.ReLU(inplace=INPLACE))
         self.layer4 = nn.Sequential(
             #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
             GroupNorm(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
-            nn.ReLU())
+            nn.ReLU(inplace=INPLACE))
         self.layer5 = nn.Sequential(
             #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
             GroupNorm(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
-            nn.ReLU())
+            nn.ReLU(inplace=INPLACE))
         self.layer6 = nn.Sequential(
             #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
             GroupNorm(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
-            nn.ReLU())
+            nn.ReLU(inplace=INPLACE))
 
         self.layer7 = nn.Sequential(
             nn.Conv2d(num_filters, 1, stride=1, kernel_size=1, padding=0))
@@ -191,7 +193,7 @@ class UNetBlock(nn.Module):
         #self.norm2 = nn.BatchNorm2d(filters_out)
         self.norm2 = GroupNorm(filters_out, filters_out // 2)
 
-        self.activation = nn.ReLU()
+        self.activation = nn.ReLU(inplace=INPLACE)
 
     def forward(self, x):
         conved1 = self.conv1(x)
@@ -255,7 +257,7 @@ class UNet(nn.Module):
         #self.data_norm = nn.BatchNorm2d(1)
         self.data_norm = GroupNorm(3,3)
         self.init_layer = nn.Conv2d(3, init_filters, (7, 7), padding=3)
-        self.activation = nn.ReLU()
+        self.activation = nn.ReLU(inplace=INPLACE)
         #self.init_norm = nn.BatchNorm2d(init_filters)
         self.init_norm = GroupNorm(init_filters, init_filters // 2)
         self.dropout = nn.Dropout(DROPOUT)

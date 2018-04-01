@@ -74,16 +74,16 @@ class NucleusDataset(Dataset):
         if root_dir is None:
             return
 
-        all_images = glob(
-            os.path.join(
-                root_dir,
-                stage_name +
-                '_*',
-                '*',
-                '*',
-                '*'))
+        p =  os.path.join(
+            root_dir,
+            stage_name +
+            '_*',
+            '*',
+            '*',
+            '*')
+        all_images = glob(p)
         if len(all_images)==0:
-            print "Failed to find any images :("
+            print "Failed to find any images :( [%s]" % p
             sys.exit(1)
         img_df = pd.DataFrame({'path': all_images})
 

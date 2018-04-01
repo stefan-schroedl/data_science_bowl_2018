@@ -8,7 +8,6 @@ import configargparse
 import copy
 import timeit
 import time
-import time
 import logging
 import math
 import re
@@ -138,7 +137,7 @@ parser = configargparse.ArgumentParser(description='Data Science Bowl 2018')
 
 parser.add('--model', help='cnn/knn', choices=['knn', 'cnn'], required=True, default="")
 parser.add('--config', '-c', default='default.cfg', is_config_file=True, help='config file path [default: %(default)s])')
-parser.add('--data', '-d', metavar='DIR', default='/Users/stefan/Documents/nucleus/input/',
+parser.add('--data', '-d', metavar='DIR', required=True,
            help='path to dataset')
 parser.add('--experiment', '-e', required=True, help='experiment name')
 parser.add('--out-dir', '-o', help='output directory')
@@ -215,6 +214,8 @@ parser.add('--random-seed', type=int, default=2018, help='set random number gene
 parser.add('--verbose', '-V', type=int, default=0, help='verbose logging')
 parser.add('--force-overwrite', type=int, default=0, help='overwrite existing checkpoint, if it exists')
 parser.add('--log-file', help='write logging output to file')
+parser.add('--cuda', type=int, default=0, help='use cuda')
+parser.add('--cuda_benchmark', type=int, default=0, help='use cuda benchmark mode')
 
 def save_checkpoint(fname,
                     model,
@@ -326,7 +327,7 @@ def validate_knn(model, loader, criterion):
 
 def torch_pred_to_np_label(pred, sz=2, max_clusters_for_dilation=100, thresh=0.0):
     if not isinstance(pred, np.ndarray):
-        pred_np = pred.data.numpy().squeeze()
+        pred_np = pred.data.cpu().numpy().squeeze()
     img_th = (pred_np > thresh).astype(int)
     img_l = redilate_mask(img_th, sz=sz, skip_clusters=max_clusters_for_dilation)
     return img_l, pred_np
@@ -340,25 +341,26 @@ def validate(model, loader, criterion, calc_iou=False, max_clusters_for_dilation
     #model.train() # for some reason, batch norm doesn't work properly with eval mode!!!
 
     if isinstance(criterion, nn.BCEWithLogitsLoss):
-        criterion.weight = torch.ones(1) # reset weight if it was changed!
+        criterion.weight = dev(torch.ones(1)) # reset weight if it was changed!
+
     running_loss = 0.0
     cnt = 0
     sum_iou = 0.0
 
     for i, row in tqdm(enumerate(loader), desc='test', total=loader.__len__()):
 
-        img, labels_seg = Variable(row['images'], requires_grad=False), Variable(row['masks_seg'], requires_grad=False)
+        img, labels_seg = Variable(dev(row['images']), volatile=True), Variable(dev(row['masks_seg']), volatile=True)
         pred = model(img)
         pred_lab = pred
 
         # HACK for upper bound/sanity check
         #pred = row['masks_seg']
-        #pred_lab = Variable(scipy.ndimage.label(row['masks_seg'])[0], requires_grad=False)
-        #pred_lab = Variable(row['masks_prep'], requires_grad=False)
+        #pred_lab = Variable(scipy.ndimage.label(row['masks_seg'])[0], volatile=True)
+        #pred_lab = Variable(row['masks_prep'], volatile=True)
         # hmmm ... loss can actually become negative if too good??? numerical problem???
         #pred[pred<=0] = -0.693
         #pred[pred>0] = 0.693
-        #pred = Variable(pred, requires_grad=False)
+        #pred = Variable(pred, volatile=True)
 
         loss = criterion(pred, labels_seg)
         running_loss += loss.data[0]
@@ -508,12 +510,13 @@ def train_cnn (train_loader,
         logging.debug('start inner %d' % inner_cnt[0])
         loss = 0
         for  row in tqdm(acc, 'train'):
-            img, labels_seg = Variable(row['images']), Variable(row['masks_prep_seg'])
+            img, labels_seg = Variable(dev(row['images'])), Variable(dev(row['masks_prep_seg']))
             pred = model(img)
             if global_state['args'].use_instance_weights > 0:
-                w = backprop_weight(row['masks'].numpy().squeeze(), pred.data[0].numpy().squeeze(), global_state)
+                #w = backprop_weight(row['masks'].numpy().squeeze(), pred.data[0].numpy().squeeze(), global_state)
+                w = backprop_weight(row['masks'].numpy().squeeze(), None, global_state)
                 weight_stats.update(w)
-                criterion.weight = torch.FloatTensor([w])
+                criterion.weight = dev(torch.FloatTensor([w]))
                 #criterion.weight = row['ov'] * w
                 #criterion.weight = pred.data.clone().fill_(w)
 
@@ -524,7 +527,7 @@ def train_cnn (train_loader,
                 loss_stats.update(loss.data[0])
                 pred_l, _ = torch_pred_to_np_label(pred, max_clusters_for_dilation=50) # dilation is slow, skip!
                 iou_stats.update(iou_metric(row['masks'].numpy().squeeze(), pred_l))
-            logging.debug('loss: %s', loss.data.numpy()[0])
+            logging.debug('loss: %s', loss.data.cpu().numpy()[0])
 
             loss.backward()
 
@@ -660,6 +663,10 @@ def baseline(
     return running_loss/cnt, m
 
 
+# switch to cpu or gpu
+def dev(x):
+    return x
+
 def main():
     # global it, best_it, best_loss, LOG, args
     args = parser.parse_args()
@@ -689,9 +696,35 @@ def main():
 
     init_logging(args)
 
+    if args.cuda > 0:
+        if not torch.cuda.is_available():
+            raise ValueError('cuda requested, but not available')
+
+        # uses the inbuilt cudnn auto-tuner to find the fastest convolution algorithms.
+        # note: actually makes it a lot slower on this problem!
+        torch.backends.cudnn.benchmark = (args.cuda_benchmark > 0)
+        torch.backends.cudnn.enabled   = True
+        global dev
+        dev = lambda x: x.cuda()
+
+        print '\tset cuda environment'
+        print '\t\ttorch.__version__              =', torch.__version__
+        print '\t\ttorch.version.cuda             =', torch.version.cuda
+        print '\t\ttorch.backends.cudnn.version() =', torch.backends.cudnn.version()
+        try:
+            print '\t\tos[\'CUDA_VISIBLE_DEVICES\']  =',os.environ['CUDA_VISIBLE_DEVICES']
+            NUM_CUDA_DEVICES = len(os.environ['CUDA_VISIBLE_DEVICES'].split(','))
+        except Exception:
+            print '\t\tos[\'CUDA_VISIBLE_DEVICES\']  =','None'
+            NUM_CUDA_DEVICES = 1
+
+        print '\t\ttorch.cuda.device_count()   =', torch.cuda.device_count()
+        print '\t\ttorch.cuda.current_device() =', torch.cuda.current_device()
+
     if args.random_seed is not None:
         np.random.seed(args.random_seed)
         torch.manual_seed(args.random_seed)
+        torch.cuda.manual_seed_all(args.random_seed)
 
     global_state = {'it':0,
                     'best_loss':1e20,
@@ -714,6 +747,7 @@ def main():
         trainer = train_cnn
         model = CNN(32)
         #model = UNetClassify(layers=4, init_filters=32)
+        model = dev(model)
         if args.weight_init != 'default':
            init_weights(model, args.weight_init)
     else:
@@ -775,12 +809,15 @@ def main():
     else:
         raise ValueError('unknown criterion: %s' % args.criterion)
 
+    criterion = dev(criterion)
+
     # optionally resume from a checkpoint
     if args.resume:
         model = load_checkpoint(args.resume, model, optimizer, global_state)
         # make sure args here is consistent with possibly updated global_state['args']!
         args = global_state['args']
         args.force_overwrite = 1
+        model = dev(model)
     else:
         # prevent accidental overwriting
         ckpt_file = get_checkpoint_file(args)
@@ -802,8 +839,8 @@ def main():
     if args.stratify > 0:
         stratify = dset.data_df['images'].map(lambda x: '{}'.format(x.size))
     train_dset, valid_dset = dset.train_test_split(test_size=args.valid_fraction, random_state=args.random_seed, shuffle=True, stratify=stratify, test_transform=noop_augmentation)
-    train_loader = DataLoader(train_dset, batch_size=1, shuffle=True)
-    valid_loader = DataLoader(valid_dset, batch_size=1, shuffle=True)
+    train_loader = DataLoader(train_dset, batch_size=1, shuffle=True, pin_memory=(args.cuda > 0), num_workers=args.workers)
+    valid_loader = DataLoader(valid_dset, batch_size=1, shuffle=True, pin_memory=(args.cuda > 0), num_workers=args.workers)
     if args.calc_iou > 0 or args.calc_pred > 0:
         train_loader.transform = noop_augmentation()
 
@@ -822,11 +859,10 @@ def main():
         # calculate predictions
         model.eval()
         #model.train() # for some reason, batch norm doesn't work properly with eval mode!!!
-        thresh = 0.0
         preds = []
         for i in tqdm(range(len(dset.data_df))):
             img = dset.data_df['images'].iloc[i]
-            pred = model(Variable(numpy_to_torch(img, True), requires_grad=False))
+            pred = model(Variable(numpy_to_torch(img, True), volatile=True))
             pred_l, pred = torch_pred_to_np_label(pred, max_clusters_for_dilation=1e20) # highest precision
             preds.append(pred_l)
 
