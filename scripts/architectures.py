@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import math
+import logging
 
 import torch
 import torch.autograd as autograd
@@ -35,6 +36,22 @@ def init_weights(net, method='kaiming'):
         else:
             if m != net:
                 init_weights(m, method=method)
+
+def fwd_hook(self, input, output):
+    # input is a tuple of packed inputs
+    # output is a Variable. output.data is the Tensor we are interested
+    print 'Inside ' + self.__class__.__name__ + ' forward'
+    print ''
+    print 'children:'
+    for k,v in self.named_modules():
+        print k, v.__class__.__name__
+    print('input: ', type(input))
+    print('input[0]: ', type(input[0]))
+    print('output: ', type(output))
+    print('')
+    print('input size:', input[0].size())
+    print('output size:', output.data.size())
+    print('output norm:', output.data.norm())
 
 
 class Flatten(nn.Module):
@@ -140,10 +157,10 @@ class CNN(nn.Module):
             GroupNorm(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU(inplace=INPLACE))
-
         self.layer7 = nn.Sequential(
             nn.Conv2d(num_filters, 1, stride=1, kernel_size=1, padding=0))
 
+        # self.register_forward_hook(fwd_hook)
 
     def forward(self, x):
         img_tp = self.mod(x)

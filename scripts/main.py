@@ -223,9 +223,6 @@ def save_checkpoint(fname,
                     global_state=None,
                     is_best = False):
 
-    m_state_dict = model.state_dict()
-    o_state_dict = optimizer.state_dict()
-
     s = {'model_state_dict': model.state_dict(),
          'model': model,
          'log': get_log()}
@@ -251,7 +248,7 @@ def load_checkpoint(fname,
     if not os.path.isfile(fname):
         raise ValueError('checkpoint not found: %s', fname)
 
-    checkpoint = torch.load(fname)
+    checkpoint = torch.load(fname, map_location='cpu') # always load to cpu first!
     try:
         set_log(checkpoint['log'])
     except:
@@ -747,9 +744,9 @@ def main():
         trainer = train_cnn
         model = CNN(32)
         #model = UNetClassify(layers=4, init_filters=32)
-        model = dev(model)
         if args.weight_init != 'default':
            init_weights(model, args.weight_init)
+        model = dev(model)
     else:
         raise ValueError("Only supported models are cnn or knn")
 

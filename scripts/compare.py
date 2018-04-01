@@ -71,7 +71,7 @@ for fname in args.files:
         #    for f in glob.glob(os.path.join(fname, ''):
         #        print f     
         raise ValueError('checkpoint not found: %s', fname)
-    checkpoint = torch.load(fname)
+    checkpoint = torch.load(fname, map_location='cpu') # always load to cpu first!
     hist[checkpoint['global_state']['args'].experiment] =  checkpoint['log']
 
 
