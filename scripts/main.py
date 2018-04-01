@@ -839,7 +839,7 @@ def main():
     train_loader = DataLoader(train_dset, batch_size=1, shuffle=True, pin_memory=(args.cuda > 0), num_workers=args.workers)
     valid_loader = DataLoader(valid_dset, batch_size=1, shuffle=True, pin_memory=(args.cuda > 0), num_workers=args.workers)
     if args.calc_iou > 0 or args.calc_pred > 0:
-        train_loader.transform = noop_augmentation()
+        train_dset.transform = noop_augmentation()
 
     if args.calc_iou > 0:
         loss, iou, _ = validate(model, train_loader, criterion, calc_iou=True, max_clusters_for_dilation=1e20)
@@ -859,7 +859,7 @@ def main():
         preds = []
         for i in tqdm(range(len(dset.data_df))):
             img = dset.data_df['images'].iloc[i]
-            pred = model(Variable(numpy_to_torch(img, True), volatile=True))
+            pred = model(Variable(dev(numpy_to_torch(img, True)), volatile=True))
             pred_l, pred = torch_pred_to_np_label(pred, max_clusters_for_dilation=1e20) # highest precision
             preds.append(pred_l)
 

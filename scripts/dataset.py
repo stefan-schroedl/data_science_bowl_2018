@@ -1,4 +1,4 @@
-#%pycat dataset.py
+#!/bin/env python
 
 from __future__ import division
 import os
@@ -175,13 +175,12 @@ class NucleusDataset(Dataset):
 
         row = self.data_df.iloc[idx].to_dict()
 
-        to_transform = ['images', 'masks', 'masks_seg', 'masks_prep', 'masks_prep_seg']
+        to_transform = [k for k in ['images', 'masks', 'masks_seg', 'masks_prep', 'masks_prep_seg'] if k in row]
 
         img_trans = self.apply_transform(self.transform, [row[k] for k in to_transform])
 
         for i, k in enumerate(to_transform):
             row[k] = img_trans[i]
-
         return row
 
 
