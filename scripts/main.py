@@ -69,29 +69,6 @@ class TrainingBlowupError(Exception):
         self.errors = errors
 
 
-def get_checkpoint_file(args, it=0):
-    if it > 0:
-        return os.path.join(args.out_dir, 'model_save_%s.%d.pth.tar' % (args.experiment, it))
-    return os.path.join(args.out_dir, 'model_save_%s.pth.tar' % args.experiment)
-
-
-def get_latest_checkpoint_file(args):
-    last_it = -1
-    last_ckpt = ''
-    pattern = re.compile('model_save_%s.(?P<it>[0-9]+).pth.tar' % args.experiment)
-    for path, dirs, files in os.walk(args.out_dir):
-        for file in files:
-            m = pattern.match(file)
-            if m:
-                it = int(m.group(1))
-                if it > last_it:
-                    last_it = it
-                    last_ckpt = file
-    if last_it == -1:
-        raise ValueError('no previous checkpoint')
-    return os.path.join(args.out_dir, last_ckpt)
-
-
 def save_plot(fname, title=None):
     train_loss, train_loss_it = get_history_log('train_loss')
     valid_loss, valid_loss_it = get_history_log('valid_loss')
@@ -216,6 +193,42 @@ parser.add('--force-overwrite', type=int, default=0, help='overwrite existing ch
 parser.add('--log-file', help='write logging output to file')
 parser.add('--cuda', type=int, default=0, help='use cuda')
 parser.add('--cuda_benchmark', type=int, default=0, help='use cuda benchmark mode')
+
+# loading and saving checkpoints
+# notes:
+# 1) pytorch documentation recommends saving and loading only the state of the model
+#    (load_state_dict()), but then you would have to track different architectures
+#    outside - simplifying for now.
+# 2) pytorch recommends instantiating the optimizer *after* the model. What to do if
+#    we read the model from file? especially if the model is saved in cuda mode, the
+#    connection will be broken. I think for now, we shouldn't reastore the optimizer
+#    at all. of course, the result is then not identical if we had continued, since the
+#    state is reinitialized (especially for adam).
+# 3) Similarly, scheduler state is not saved/restored.
+
+
+def get_checkpoint_file(args, it=0):
+    if it > 0:
+        return os.path.join(args.out_dir, 'model_save_%s.%d.pth.tar' % (args.experiment, it))
+    return os.path.join(args.out_dir, 'model_save_%s.pth.tar' % args.experiment)
+
+
+def get_latest_checkpoint_file(args):
+    last_it = -1
+    last_ckpt = ''
+    pattern = re.compile('model_save_%s.(?P<it>[0-9]+).pth.tar' % args.experiment)
+    for path, dirs, files in os.walk(args.out_dir):
+        for file in files:
+            m = pattern.match(file)
+            if m:
+                it = int(m.group(1))
+                if it > last_it:
+                    last_it = it
+                    last_ckpt = file
+    if last_it == -1:
+        raise ValueError('no previous checkpoint')
+    return os.path.join(args.out_dir, last_ckpt)
+
 
 def save_checkpoint(fname,
                     model,
@@ -742,13 +755,27 @@ def main():
 
     elif args.model == 'cnn':
         trainer = train_cnn
-        model = CNN(32)
-        #model = UNetClassify(layers=4, init_filters=32)
+        #model = CNN(32)
+        model = UNetClassify(layers=4, init_filters=32)
         if args.weight_init != 'default':
            init_weights(model, args.weight_init)
         model = dev(model)
     else:
         raise ValueError("Only supported models are cnn or knn")
+
+    # optionally resume from a checkpoint
+    if args.resume:
+        model = load_checkpoint(args.resume, model, None, global_state)
+        # make sure args here is consistent with possibly updated global_state['args']!
+        args = global_state['args']
+        args.force_overwrite = 1
+        model = dev(model)
+    else:
+        # prevent accidental overwriting
+        ckpt_file = get_checkpoint_file(args)
+        if os.path.isfile(ckpt_file) and args.force_overwrite == 0:
+            raise ValueError('checkpoint already exists, exiting: %s' % ckpt_file)
+        clear_log()
 
     logging.info('model:\n')
     logging.info(model)
@@ -788,7 +815,7 @@ def main():
         # dummy for now
         scheduler = LambdaLR(optimizer, lr_lambda=lambda epoch: args.lr_decay)
 
-
+    # create criterion
     if args.use_instance_weights > 0 and args.criterion != 'bce':
         raise ValueError('instance weights currently only supported for bce criterion')
     # define loss function (criterion)
@@ -807,20 +834,6 @@ def main():
         raise ValueError('unknown criterion: %s' % args.criterion)
 
     criterion = dev(criterion)
-
-    # optionally resume from a checkpoint
-    if args.resume:
-        model = load_checkpoint(args.resume, model, optimizer, global_state)
-        # make sure args here is consistent with possibly updated global_state['args']!
-        args = global_state['args']
-        args.force_overwrite = 1
-        model = dev(model)
-    else:
-        # prevent accidental overwriting
-        ckpt_file = get_checkpoint_file(args)
-        if os.path.isfile(ckpt_file) and args.force_overwrite == 0:
-            raise ValueError('checkpoint already exists, exiting: %s' % ckpt_file)
-        clear_log()
 
     # Data loading
     def load_data():
