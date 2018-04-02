@@ -205,10 +205,10 @@ class UNetBlock(nn.Module):
         self.filters_out = filters_out
         self.conv1 = nn.Conv2d(filters_in, filters_out, (3, 3), padding=1)
         #self.norm1 = nn.BatchNorm2d(filters_out)
-        self.norm1 = GroupNorm(filters_out, filters_out // 2)
+        self.norm1 = GroupNorm(filters_out, filters_out)
         self.conv2 = nn.Conv2d(filters_out, filters_out, (3, 3), padding=1)
         #self.norm2 = nn.BatchNorm2d(filters_out)
-        self.norm2 = GroupNorm(filters_out, filters_out // 2)
+        self.norm2 = GroupNorm(filters_out, filters_out)
 
         self.activation = nn.ReLU(inplace=INPLACE)
 
@@ -276,7 +276,7 @@ class UNet(nn.Module):
         self.init_layer = nn.Conv2d(3, init_filters, (7, 7), padding=3)
         self.activation = nn.ReLU(inplace=INPLACE)
         #self.init_norm = nn.BatchNorm2d(init_filters)
-        self.init_norm = GroupNorm(init_filters, init_filters // 2)
+        self.init_norm = GroupNorm(init_filters, init_filters)
         self.dropout = nn.Dropout(DROPOUT)
 
     def forward(self, x):

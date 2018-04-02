@@ -507,7 +507,7 @@ def train_cnn (train_loader,
         logging.debug('start inner %d' % inner_cnt[0])
         loss = 0
         for  row in tqdm(acc, 'train'):
-            img, labels_seg = Variable(dev(row['images'])), Variable(dev(row['masks_prep_seg']))
+            img, labels_seg = Variable(dev(row['images']), requires_grad=False), Variable(dev(row['masks_prep_seg']), requires_grad=False)
             pred = model(img)
             if global_state['args'].use_instance_weights > 0:
                 #w = backprop_weight(row['masks'].numpy().squeeze(), pred.data[0].numpy().squeeze(), global_state)
@@ -910,7 +910,7 @@ def main():
         try:
             it, best_loss, best_it, epoch_loss, epoch_iou, time_total, time_val, n_val = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
 
-            logging.info('[%d, %d]\tepoch: train loss %.3f, iou=%.3f, total time=%d, val time=%d, it/s=%.2f, train it/s=%.2f, valid it/s=%.2f' %
+            logging.info('[%d, %d]\tepoch: train loss %.3f, iou=%.3f, total time=%d, val time=%d, s/it=%.2f, train s/it=%.2f, valid s/it=%.2f' %
                          (epoch,
                           global_state['it'],
                           epoch_loss,
