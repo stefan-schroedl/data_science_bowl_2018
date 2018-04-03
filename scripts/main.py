@@ -6,6 +6,7 @@ from tqdm import tqdm
 from sklearn.neighbors import KNeighborsClassifier
 from KNN import *
 from GUESS import *
+from STN import *
 #torch imports
 #from main import *
 import torch
@@ -522,7 +523,7 @@ def main():
     global it, best_it, best_loss, LOG, args
     args = parser.parse_args()
 
-    if args.model not in ['knn','cnn','guess' ]:
+    if args.model not in ['knn','cnn','guess' ,'stn']:
         print "Only supported models are cnn or knn"
         sys.exit(1)
 
@@ -564,6 +565,9 @@ def main():
     if args.model in ('guess'):
         trainer=train_knn
         model=GUESS()
+    if args.model in ('stn'):
+        trainer=train_knn
+        model=STN()
     if args.model in ('cnn',):
         trainer=train_cnn
         model=CNN()
