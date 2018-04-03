@@ -43,6 +43,7 @@ class NucleusDataset(Dataset):
 
     @staticmethod
     def read_image(in_img_list):
+        print "READ IMG",in_img_list[0]
         #img = img_as_float(rgb2hsv(rgba2rgb(io.imread(in_img_list[0]))))
         img = Image.open(in_img_list[0])
         return np.array(img.convert('RGB')), img.size

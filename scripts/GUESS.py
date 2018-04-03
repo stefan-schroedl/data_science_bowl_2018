@@ -8,6 +8,10 @@ class GUESS():
 
 
     def transform_into(self,img,sub_img,p,method='diff',show=False):
+        if img.ndim==2:
+            img=img[:,:,None]
+        if img.shape[2]==1:
+            img=np.concatenate((img,img,img),axis=2)
         if sub_img.ndim==2:
             sub_img=sub_img[:,:,None]
             sub_img=np.concatenate((sub_img,sub_img,sub_img),axis=2)
@@ -19,8 +23,10 @@ class GUESS():
         scaled = cv2.resize(sub_img, (0,0), fx=x_scale, fy=y_scale) 
         rotated = imutils.rotate_bound(scaled, rotation)
 	sub_img = rotated
-        height,width,_ = img.shape
-        sub_height,sub_width,_=sub_img.shape
+        height = img.shape[0]
+        width = img.shape[1]
+        sub_height = sub_img.shape[0]
+        sub_width = sub_img.shape[1]
         roi_y_start=height/2-sub_height/2
         roi_x_start=width/2-sub_width/2
 
@@ -57,7 +63,12 @@ class GUESS():
         else:
                 print "unsupported method"
 
-	img[(img<0) * (img>-25)]=-25 # higher pentaly here #TODO FILL IN WITH BACKGROUND VARIANCE?
+        img=img.astype(np.float)
+
+        #original scoring
+	#img[(img<0) * (img>-25)]=-25 # higher pentaly here #TODO FILL IN WITH BACKGROUND VARIANCE?
+        #new scoring?
+	#img[(img<0)]=-100 # higher pentaly here #TODO FILL IN WITH BACKGROUND VARIANCE?
 	img=np.absolute(img)
 
 	mse=np.multiply(img,img).sum()
@@ -67,8 +78,6 @@ class GUESS():
 	if show:
 		img2=img.copy()
 		img2=(img2/img2.max())*255
-		
-
 		img2=img2.astype(np.uint8)
        		cv2.imshow('curmask',img2)
         	cv2.waitKey(100)
@@ -98,6 +107,9 @@ class GUESS():
 
 	return img_crop
 
+    #img is the img to search
+    #sub img is the cropped needle
+    #sub mask is the mask of the nuclei in the sub_img
     def search_fit(self,img,sub_img,sub_mask):
         # parameters , 
         # Y shift 
@@ -105,7 +117,9 @@ class GUESS():
         # Rotation
         # X scale
         # Y scale
-	height,width,_=img.shape
+        shape = img.shape
+        height = shape[0]
+        width = shape[1]
 
         _, contours, hierarchy = cv2.findContours(sub_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 	base_mse=np.multiply(img,img).sum()
@@ -120,7 +134,7 @@ class GUESS():
 		vs = [ height*5, width*5 , 600, 2, 2 ]
 		meta_param = {'u':np.array(means), 'o':np.array(vs)}
 		best_p=None
-		for y in xrange(300):
+		for y in xrange(150):
 		    params = np.random.multivariate_normal(meta_param['u'], np.diag(meta_param['o']), small_it)
 		    scores=[]
 		    for x in xrange(params.shape[0]):
@@ -129,21 +143,61 @@ class GUESS():
 			    scores.append((mse-base_mse,x))
 		    scores.sort(reverse=True)
 		    tops=np.vstack([ params[i] for x,i in scores[int(len(scores)*(1-keep)):] ])
-		    meta_param['u']=meta_param['u']*0.5+0.5*tops.mean(0)
-		    meta_param['o']=meta_param['o']*0.5+0.5*tops.var(0)
+		    meta_param['u']=meta_param['u']*0.9+0.1*tops.mean(0)
+		    meta_param['o']=meta_param['o']*0.9+0.1*tops.var(0)
 		    #print meta_param['o']
-		    meta_param['o'][2]=max(meta_param['o'][2],100)
+		    #meta_param['o'][2]=max(meta_param['o'][2],100)
 		    #box=cv2.boxPoints(rect)
 		    #print sub_img[box]
-		    #print scores[0]
+		    print scores[0],meta_param['o']
 		    best_p=params[scores[0][1]]
+		    #_,i=self.transform_into(img,ximg,best_p,show=True)
+                    #cv2.imshow('x',i)
+                    #cv2.waitKey(1000)
 		self.transform_into(img,ximg,best_p,show=True)
-		cv2.waitKey(1000)
+		cv2.waitKey(2000)
 		_,img=self.transform_into(img,ximg_mask*0,best_p,show=True,method='paste')
-		cv2.waitKey(1000)
+		cv2.waitKey(100)
 
         sys.exit(1)
 
+    def get_stacked(self,img,mask,mask_seg):
+        kernel = np.ones((3,3), np.uint8)
+        mask_eroded=cv2.erode(mask, kernel, iterations=1)[:,:,None].astype(np.uint8)
+        
+        super_boundary = mask.copy()[:,:,0]*0
+        super_boundary_2 = mask.copy()[:,:,0]*0
+        max_components=mask.max()
+        kernel = np.ones((5,5), np.uint8)
+        for x in xrange(max_components):
+            this_one = ((mask==(x+1))*255).astype(np.uint8)[:,:,0]
+            boundary = cv2.Laplacian(this_one,cv2.CV_8U,ksize=3)
+            super_boundary = np.maximum(super_boundary,boundary)
+
+            #super boundary 2 by dilation of border
+            #boundary = cv2.dilate(boundary, kernel, iterations=3)
+            #_,boundary_thresh = cv2.threshold(boundary,100,255,cv2.THRESH_BINARY)
+            #super_boundary_2 += boundary_thresh/255
+
+            #super boundary 2 by dilation of mask
+            boundary = cv2.dilate(this_one, kernel, iterations=1)
+            _,boundary_thresh = cv2.threshold(boundary,100,255,cv2.THRESH_BINARY)
+            super_boundary_2 += boundary_thresh/255
+        #print "X",super_boundary_2.max()
+        super_boundary_2 = ((super_boundary_2>1)*255).astype(np.uint8)
+        #cv2.imshow('sup 2',np.concatenate((super_boundary_2,mask_seg[:,:,0])))
+        #cv2.waitKey(3000)
+        boundary = cv2.Laplacian(mask_seg,cv2.CV_8U,ksize=3)
+        boundary = boundary.reshape(boundary.shape[0],boundary.shape[1],1)
+        assert(boundary.max()<=255)
+        #0-2 RGB
+        #3 SEG
+        #4 BOUNDARY
+        #5 BLEND
+        #6 SUPER BOUNDARY
+        #7 SUPER BOUNDARY 2
+        stacked_img = np.concatenate((img,mask_seg,boundary,np.maximum(mask_seg/2,boundary),super_boundary[:,:,None],super_boundary_2[:,:,None],mask_eroded),axis=2)
+        return stacked_img.astype(np.uint8)
 
     def prepare_fit(self,img,mask,mask_seg):
 	img = (img.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
@@ -152,7 +206,19 @@ class GUESS():
         #mask_eroded=cv2.erode(mask, kernel, iterations=1)[:,:,None].astype(np.uint8)
 
         mask_seg = (mask_seg.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
+        stacked=self.get_stacked(img,mask,mask_seg)
 
+        boundary=stacked[:,:,4]
+        k=35
+        blurred_boundary=np.maximum(boundary,cv2.GaussianBlur(boundary,(k,k),0))
+        for x in xrange(10):
+            blurred_boundary=np.maximum(boundary,cv2.GaussianBlur(blurred_boundary,(k,k),0))
+        blurred_boundary=blurred_boundary.astype(np.float)
+        blurred_boundary/=blurred_boundary.max()
+        blurred_boundary*=255
+        blurred_boundary=blurred_boundary.astype(np.uint8)
+
+    
         #self.images.append((img,mask,mask_seg,mask_eroded))
         #find and store the mask contours
         for x in xrange(mask.max()):
@@ -160,7 +226,17 @@ class GUESS():
             cur_mask = np.zeros_like(mask).astype(np.uint8)
             cur_mask[mask==idx]=1
             _, contours, hierarchy = cv2.findContours(cur_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            #self.search_fit(img,np.multiply(cur_mask,img).astype(np.uint8),cur_mask)
+            #want to pass in hard contour as pin and blurred boundaries as haystack
+            use_contours=False
+            if use_contours:
+                contour=img.copy()*0
+                for y in xrange(len(contours)):
+                    cv2.fillPoly(contour, [contours[y]], (255,255,255))
+                    #cv2.drawContours(contour,[contours[y]],0,(255,255,255),2)
+                #self.search_fit(blurred_boundary,contour.astype(np.uint8),cur_mask)
+                self.search_fit(mask_seg,contour.astype(np.uint8),cur_mask)
+            else:
+                self.search_fit(img,np.multiply(cur_mask,img).astype(np.uint8),cur_mask)
             if len(contours)==0:
                 print "OH NO..."
             if True:
@@ -168,8 +244,6 @@ class GUESS():
                 for x in xrange(len(contours)):
                     color = np.random.randint(0,255,(3)).tolist() 
                     cv2.drawContours(img,[contours[x]],0,color,2)
-                cv2.imshow('curmask',img)
-                cv2.waitKey(5000)
             #self.mask_contours.append(contours)
         print "PREAPRE FIT",img.sum()
 

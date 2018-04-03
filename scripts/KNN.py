@@ -76,6 +76,7 @@ class KNN():
             super_boundary = np.maximum(super_boundary,boundary)
 
             #super boundary 2 by dilation of border
+            #kernel = np.ones((5,5), np.uint8)
             #boundary = cv2.dilate(boundary, kernel, iterations=3)
             #_,boundary_thresh = cv2.threshold(boundary,100,255,cv2.THRESH_BINARY)
             #super_boundary_2 += boundary_thresh/255
@@ -213,6 +214,7 @@ class KNN():
         self.patches = []
         self.patches_super_boundary = []
         self.patches_super_boundary_2 = []
+        self.nuclei = []
         #generate the patches
         total_patches=0
         for idx in image_idxs:
@@ -507,6 +509,19 @@ class KNN():
         return similar_images_idxs
 
 
+    def remove_overlap(self,labels):
+        overlaps= np.zeros_like(labels).astype(np.uint8)
+        kernel = np.ones((5,5), np.uint8)
+        for x in xrange(labels.max()):
+            idx=x+1
+            cur_mask = np.zeros_like(labels).astype(np.uint8)
+            cur_mask[labels==idx]=255
+            cur_mask = cv2.dilate(cur_mask, kernel, iterations=1)
+            cur_mask[cur_mask>100]=1
+            overlaps+=cur_mask
+        labels=labels.copy()
+        labels[overlaps>1]=0
+        return labels
 
     def predict(self,img):
         print "CONVEX HULL CHECK"
@@ -553,39 +568,43 @@ class KNN():
         #cv2.imshow('predict img in',img)
         #cv2.waitKey(1)
         #img=img.numpy()[0]
-        height,width,channels = img.shape
-        img_patches = extract_patches_2d(img, (self.patch_size,self.patch_size)).astype(np.float64)
-        img_patches = img_patches.reshape(img_patches.shape[0], -1).astype(np.float32)
-	if self.normalize:
-	    img_patches -= np.mean(img_patches, axis=0)
-	    img_patches /= np.std(img_patches, axis=0)
-        nearest_wds=patch_model.search(img_patches.astype(np.float32), self.n)
-	knn_patches=np.array([])
-        print "START IMG PATCH GEN - STEP 2"
-	for x in xrange(img_patches.shape[0]):
-	    idxs=nearest_wds[1][x]
-            #idxs=idxs[idxs>=0]
-            assert(idxs.min()>=0)
-	    #use averaging
-	    new_patch=self.patches_numpy[idxs].mean(axis=0)
-	    #new_patch=np.median(self.patches_numpy[idxs],axis=0)
-	    #use similarity
-	    if self.similarity:
-		distances=nearest_wds[0][x]
-		similarity=1.0/distances
-		similarity/=similarity.sum()
-		new_patch=(self.patches_numpy[idxs]*similarity[:,np.newaxis]).sum(axis=0)
-	    #gaussian spread
-	    if self.gauss_blur:
-		new_patch=np.multiply(new_patch,self.gkernel)
+        reconstructed=None
+        for reconstruct_it in xrange(1):
+            print "RECONSTRUCTING", reconstruct_it
+            height,width,channels = img.shape
+            img_patches = extract_patches_2d(img, (self.patch_size,self.patch_size)).astype(np.float64)
+            img_patches = img_patches.reshape(img_patches.shape[0], -1).astype(np.float32)
+            if self.normalize:
+                img_patches -= np.mean(img_patches, axis=0)
+                img_patches /= np.std(img_patches, axis=0)
+            nearest_wds=patch_model.search(img_patches.astype(np.float32), self.n)
+            knn_patches=np.array([])
+            print "START IMG PATCH GEN - STEP 2"
+            for x in xrange(img_patches.shape[0]):
+                idxs=nearest_wds[1][x]
+                #idxs=idxs[idxs>=0]
+                assert(idxs.min()>=0)
+                #use averaging
+                new_patch=self.patches_numpy[idxs].mean(axis=0)
+                #new_patch=np.median(self.patches_numpy[idxs],axis=0)
+                #use similarity
+                if self.similarity:
+                    distances=nearest_wds[0][x]
+                    similarity=1.0/distances
+                    similarity/=similarity.sum()
+                    new_patch=(self.patches_numpy[idxs]*similarity[:,np.newaxis]).sum(axis=0)
+                #gaussian spread
+                if self.gauss_blur:
+                    new_patch=np.multiply(new_patch,self.gkernel)
 
-	    if knn_patches.ndim==1:
-		knn_patches=np.zeros((img_patches.shape[0],new_patch.shape[0]))
-	    knn_patches[x]=new_patch
-        print "START RECONSTRUCT"
-	knn_patches = knn_patches.reshape(knn_patches.shape[0], *(self.patch_size,self.patch_size,self.channels))
-	reconstructed = reconstruct_from_patches_2d( knn_patches, (height, width,self.channels))
-	reconstructed_img = reconstructed[:,:,:3].astype(np.uint8)
+                if knn_patches.ndim==1:
+                    knn_patches=np.zeros((img_patches.shape[0],new_patch.shape[0]))
+                knn_patches[x]=new_patch
+            print "START RECONSTRUCT"
+            knn_patches = knn_patches.reshape(knn_patches.shape[0], *(self.patch_size,self.patch_size,self.channels))
+            reconstructed = reconstruct_from_patches_2d( knn_patches, (height, width,self.channels))
+            reconstructed_img = reconstructed[:,:,:3].astype(np.uint8)
+            img=reconstructed_img.copy()
         #cv2.imshow('recon',reconstructed_img)
         #cv2.waitKey(10000)
 	reconstructed_mask = reconstructed[:,:,3].astype(np.uint8)
@@ -620,8 +639,6 @@ class KNN():
         enhanced_label[enhanced_label<0]=0
         enhanced_label=enhanced_label.astype(np.uint8)
         #cv2.imshow('en',enhanced_thresh)
-        cv2.imshow('color lab l',np.concatenate((self.color_label(labeled,reconstructed_mask),self.color_label(labeled2,reconstructed_mask),self.color_label(enhanced_label,reconstructed_mask),img),axis=1))
-        cv2.waitKey(2)
         d={}
         d['img']=reconstructed_img
         d['seg']=reconstructed_mask
@@ -635,6 +652,10 @@ class KNN():
         d['clustered']=clustered
         d['similar_patch_images']=similar_patch_images
         d['similar_hist_images']=similar_hist_images
+        d['enhanced_label_remove']=self.remove_overlap(d['enhanced_label'])
+        d['clustered_remove']=self.remove_overlap(d['clustered'])
+        cv2.imshow('color lab l',np.concatenate((self.color_label(labeled,reconstructed_mask),self.color_label(labeled2,reconstructed_mask),self.color_label(enhanced_label,reconstructed_mask),self.color_label(d['enhanced_label_remove'],reconstructed_mask),img),axis=1))
+        cv2.waitKey(2)
         return d 
     
     

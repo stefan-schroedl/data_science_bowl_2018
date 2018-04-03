@@ -68,6 +68,7 @@ def iou_metric(labels, y_pred, print_table=False):
     # Loop over IoU thresholds
     prec = []
     if print_table:
+        print union,intersection
         print("Thresh\tTP\tFP\tFN\tPrec.")
     for t in np.arange(0.5, 1.0, 0.05):
         tp, fp, fn, _, _ = precision_at(iou, t)

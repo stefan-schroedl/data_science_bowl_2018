@@ -275,7 +275,9 @@ iou_pipe=[]
 iou_l=[]
 iou_l2=[]
 iou_el=[]
+iou_elr=[]
 iou_clus=[]
+iou_clusr=[]
 def validate_knn(model, loader, criterion):
     running_loss = 0.0
     cnt = 0
@@ -321,8 +323,10 @@ def validate_knn(model, loader, criterion):
         iou_l.append(iou_metric(torch_to_numpy(labels,scale=1),p['labeled']))
         iou_el.append(iou_metric(torch_to_numpy(labels,scale=1),p['enhanced_label']))
         iou_l2.append(iou_metric(torch_to_numpy(labels,scale=1),p['labeled2']))
-        iou_clus.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered']))
-        s="\t".join(map(lambda x : str(x) , ["IOU",iou_pipe[-1],iou_l[-1],iou_l2[-1],iou_el[-1],iou_clus[-1],sum(iou_pipe)/len(iou_pipe),sum(iou_l)/len(iou_l),sum(iou_l2)/len(iou_l2),sum(iou_el)/len(iou_el),sum(iou_clus)/len(iou_clus)]))
+        iou_clus.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered'],print_table=True))
+        iou_clusr.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_remove']))
+        iou_elr.append(iou_metric(torch_to_numpy(labels,scale=1),p['enhanced_label_remove']))
+        s="\t".join(map(lambda x : str(x) , ["IOU",iou_pipe[-1],iou_l[-1],iou_l2[-1],iou_el[-1],iou_clus[-1],iou_elr[-1],iou_clusr[-1],"XXXXX",sum(iou_pipe)/len(iou_pipe),sum(iou_l)/len(iou_l),sum(iou_l2)/len(iou_l2),sum(iou_el)/len(iou_el),sum(iou_clus)/len(iou_clus),sum(iou_elr)/len(iou_elr),sum(iou_clusr)/len(iou_clusr)]))
         print s
         f=open(args.prefix+'%d_%d.txt' % (valn,i),'w')
         f.write(s+'\n')
