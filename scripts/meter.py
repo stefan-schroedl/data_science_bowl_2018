@@ -10,8 +10,16 @@ class AverageMeter(object):
         self.sum = 0
         self.count = 0
 
-    def update(self, val, n=1):
-        self.val = val
-        self.sum += val * n
-        self.count += n
+    def update(self, obj, n=1):
+        if isinstance(obj, AverageMeter):
+            # add stats from other object
+            self.val = obj.val
+            self.sum += obj.sum * n
+            self.count += obj.count * n
+        else:
+            self.val = obj
+            self.sum += obj * n
+            self.count += n
+
         self.avg = self.sum / self.count
+

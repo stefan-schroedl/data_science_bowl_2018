@@ -236,6 +236,7 @@ def save_checkpoint(fname,
                     global_state=None,
                     is_best = False):
 
+    #model.clearState()
     s = {'model_state_dict': model.state_dict(),
          'model': model,
          'log': get_log()}
@@ -507,18 +508,21 @@ def train_cnn (train_loader,
     # https://stackoverflow.com/questions/4851463/python-closure-write-to-variable-in-parent-scope
 
     acc = [] # train data buffer, needed for gradient accumulation with lbfgs
+    # TODO improve naming of stats
     inner_cnt = [0]
     running_loss = AverageMeter()
-    final_loss = AverageMeter()
+    running_final_loss = AverageMeter()
     weight_stats = AverageMeter()
     iou_stats = AverageMeter()
     loss_stats = AverageMeter()
+    final_stats = AverageMeter() # only meaningful for lbfgs, loss before last descent in closure
 
     # helper function to do forward and accumulative backward passes on acc buffer
     def closure():
         optimizer.zero_grad()
         logging.debug('start inner %d' % inner_cnt[0])
         loss = 0
+        running_final_loss.reset()
         for  row in tqdm(acc, 'train'):
             img, labels_seg = Variable(dev(row['images']), requires_grad=False), Variable(dev(row['masks_prep_seg']), requires_grad=False)
             pred = model(img)
@@ -531,7 +535,7 @@ def train_cnn (train_loader,
                 #criterion.weight = pred.data.clone().fill_(w)
 
             loss = criterion(pred, labels_seg)
-            final_loss.update(loss.data[0])
+            running_final_loss.update(loss.data[0])
             if inner_cnt[0] == 0: # for lbfgs, only record the first eval!
                 running_loss.update(loss.data[0])
                 loss_stats.update(loss.data[0])
@@ -548,6 +552,7 @@ def train_cnn (train_loader,
 
         inner_cnt[0] += 1
 
+        final_stats.update(running_final_loss)
         return loss
 
     more_data = True
@@ -556,7 +561,7 @@ def train_cnn (train_loader,
         acc = []
         inner_cnt = [0]
         running_loss.reset()
-        final_loss.reset()
+        running_final_loss.reset()
         weight_stats.reset()
         grad = [float('nan')]
         it = global_state['it']
@@ -595,8 +600,8 @@ def train_cnn (train_loader,
                 insert_log(it, 'bp_wt', weight_stats.avg)
 
             if is_lbfgs:
-                final_train_loss = final_loss.avg
-                logging.debug('final loss: %f', final_train_loss)
+                final_train_loss = running_final_loss.avg
+                logging.debug('initial loss: %.3f, final loss: %.3f' %(train_loss, final_train_loss))
                 insert_log(it, 'final_train_loss', final_train_loss)
 
             validated = False
@@ -638,7 +643,7 @@ def train_cnn (train_loader,
 
     time_end = time.time()
     time_total = time_end - time_start
-    return global_state['it'], global_state['best_loss'], global_state['best_it'], loss_stats.avg, iou_stats.avg, time_total, time_val, n_val
+    return global_state['it'], global_state['best_loss'], global_state['best_it'], loss_stats.avg, iou_stats.avg, final_stats.avg, time_total, time_val, n_val
 
 
 def baseline(
@@ -722,8 +727,8 @@ def main():
         print '\t\ttorch.version.cuda             =', torch.version.cuda
         print '\t\ttorch.backends.cudnn.version() =', torch.backends.cudnn.version()
         try:
-            print '\t\tos[\'CUDA_VISIBLE_DEVICES\']  =',os.environ['CUDA_VISIBLE_DEVICES']
             NUM_CUDA_DEVICES = len(os.environ['CUDA_VISIBLE_DEVICES'].split(','))
+            print '\t\tos[\'CUDA_VISIBLE_DEVICES\']  =', os.environ['CUDA_VISIBLE_DEVICES']
         except Exception:
             print '\t\tos[\'CUDA_VISIBLE_DEVICES\']  =','None'
             NUM_CUDA_DEVICES = 1
@@ -921,13 +926,14 @@ def main():
 
     for epoch in range(args.epochs):
         try:
-            it, best_loss, best_it, epoch_loss, epoch_iou, time_total, time_val, n_val = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
+            it, best_loss, best_it, epoch_loss, epoch_iou, epoch_final_loss, time_total, time_val, n_val = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
 
-            logging.info('[%d, %d]\tepoch: train loss %.3f, iou=%.3f, total time=%d, val time=%d, s/it=%.2f, train s/it=%.2f, valid s/it=%.2f' %
+            logging.info('[%d, %d]\tepoch: train loss %.3f, iou=%.3f, final loss=%.3f, total time=%d, val time=%d, s/it=%.2f, train s/it=%.2f, valid s/it=%.2f' %
                          (epoch,
                           global_state['it'],
                           epoch_loss,
                           epoch_iou,
+                          epoch_final_loss,
                           time_total,
                           time_val,
                           1.0 * time_total / len(train_loader),
@@ -949,6 +955,7 @@ def main():
                 global_state)
 
             insert_log(global_state['it'], 'epoch_train_loss', epoch_loss)
+            insert_log(global_state['it'], 'epoch_final_loss', epoch_final_loss)
             insert_log(global_state['it'], 'train_iou', epoch_iou)
             insert_log(global_state['it'], 'lr', global_state['lr'])
 
