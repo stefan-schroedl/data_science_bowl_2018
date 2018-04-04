@@ -88,7 +88,7 @@ class Net(nn.Module):
 
         # Spatial transformer localization-network
         self.localization = nn.Sequential(
-            nn.Conv2d(1, 8, kernel_size=7),
+            nn.Conv2d(2, 8, kernel_size=7),
             nn.MaxPool2d(2, stride=2),
             nn.ReLU(True),
             nn.Conv2d(8, 6, kernel_size=5),
@@ -172,8 +172,9 @@ class STN():
         return ms
 
     def fit(self):
-        nuclei,nuclei_mask,nuclei_bound=self.nuclei[0]
+        nuclei,nuclei_mask,nuclei_bound,whole_bound=self.nuclei[0]
         nuclei_bound_torch = self.torch_from_numpy(nuclei_bound).expand(1,-1,-1,-1)
+        whole_bound_torch = self.torch_from_numpy(whole_bound[:,:,None]).expand(1,-1,-1,-1)
         mb=32
         loss_fn = torch.nn.MSELoss(size_average=True)
         optimizer = optim.SGD(self.model.parameters(), lr=0.01, momentum=0.9)
@@ -183,7 +184,11 @@ class STN():
             targets = Variable(self.torch_batch_rotate(-angles))
             nuclei_bound_torch=nuclei_bound_torch.expand(mb,-1,-1,-1)
             grid = F.affine_grid(rotation_ms, nuclei_bound_torch.size())
-            x = F.grid_sample(nuclei_bound_torch, grid)
+            x = F.grid_sample(nuclei_bound_torch, grid) #rotate the nuclei
+
+            if x.size()!=whole_bound_torch.size():
+                whole_bound_torch=Variable(whole_bound_torch.expand_as(x),requires_grad=False)
+            x=torch.cat([x,whole_bound_torch],1)
 
             #xzero the grad
             optimizer.zero_grad()
@@ -290,7 +295,7 @@ class STN():
             cur_mask[mask==idx]=1
             sub_img=np.multiply(cur_mask,img).astype(np.uint8)
             sub_bound=np.multiply(cur_mask,blurred_boundary[:,:,None]).astype(np.uint8)
-            self.nuclei.append((sub_img,cur_mask*255,sub_bound))
+            self.nuclei.append((sub_img,cur_mask*255,sub_bound,blurred_boundary))
             #_, contours, hierarchy = cv2.findContours(cur_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             #for cnt in contours:
             #    rect = cv2.minAreaRect(cnt)

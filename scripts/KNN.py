@@ -6,6 +6,7 @@ import imutils
 import cv2
 import faiss   
 from transform import random_rotate90_transform1
+from GUESS import *
 class KNN():
     def __init__(self,n=5,hist_n=50,patch_size=13,sample=400,gauss_blur=False,similarity=False,normalize=True,super_boundary_threshold=20,erode=False,match_method='hist'):
         print "SAMPLE IS ",sample, "SHOULD BE ~400?"
@@ -214,7 +215,6 @@ class KNN():
         self.patches = []
         self.patches_super_boundary = []
         self.patches_super_boundary_2 = []
-        self.nuclei = []
         #generate the patches
         total_patches=0
         for idx in image_idxs:
@@ -411,6 +411,49 @@ class KNN():
         img_norm=((img.astype(np.float32)/img.max())*255).astype(np.uint8)
         return img_norm
 
+    #https://stackoverflow.com/questions/37177811/crop-rectangle-returned-by-minarearect-opencv-python
+    def crop_minAreaRect(self,img, rect):
+        # rotate img
+        angle = rect[2]
+        rows,cols = img.shape[0], img.shape[1]
+        M = cv2.getRotationMatrix2D((cols/2,rows/2),angle,1)
+        img_rot = cv2.warpAffine(img,M,(cols,rows))
+
+        # rotate bounding box
+        rect0 = (rect[0], rect[1], 0.0)
+        box = cv2.boxPoints(rect)
+        pts = np.int0(cv2.transform(np.array([box]), M))[0]
+        pts[pts < 0] = 0
+
+        # crop
+        img_crop = img_rot[pts[1][1]:pts[0][1],
+                           pts[1][0]:pts[2][0]]
+
+        return img_crop
+
+    def crop(self,img,rect,bound=0):
+        x,y,w,h = rect
+        x_start=x-bound/2
+        x_end=x+w+bound/2
+        y_start=y-bound/2
+        y_end=y+h+bound/2
+        if x_start<0:
+            x_start=0
+        if y_start<0:
+            y_start=0
+        if x_end>img.shape[1]:
+            x_end=img.shape[1]-1
+        if y_end>img.shape[0]:
+            y_end=img.shape[0]-1
+        print "XXXX"
+        print x,x+w,y,y+h
+        print x_start,x_end,y_start,y_end
+        
+        # crop
+        #return img[y:y+h,x:x+w,:]
+        return img[y_start:y_end,x_start:x_end,:]
+
+
     def by_cluster(self,img,reconstructed,similar_contours):
         assert(reconstructed.shape[2]==self.channels)
         img=img.copy()
@@ -454,8 +497,21 @@ class KNN():
                 cv2.fillPoly(roi_mask, [contours[x]], 1)
                 roi = np.multiply(reconstructed,roi_mask)
                 roi_img = roi[:,:,:3].astype(np.uint8)
-                roi_mask = roi[:,:,3].astype(np.uint8)
+                print "GUESS IN KNN"
+		rect = cv2.minAreaRect(contours[x])
+                roi_sq_crop = self.crop(roi_img,cv2.boundingRect(contours[x]),bound=50)
                 roi_boundary = roi[:,:,4].astype(np.uint8)
+                if roi_sq_crop.shape[0]*roi_sq_crop.shape[1]>5000:
+                    print rect
+                    roi_cropped=self.crop_minAreaRect(roi_img, rect)
+                    roi_sq_crop_bound=self.crop(roi_boundary[:,:,None],cv2.boundingRect(contours[x]),bound=50).astype(np.float)
+                    roi_sq_crop_bound/=roi_sq_crop_bound.max()
+                    roi_sq_crop_bound*=255
+                    roi_sq_crop_bound=roi_sq_crop_bound.astype(np.uint8)
+                    cv2.imshow('bound',roi_sq_crop_bound)
+                    cv2.waitKey(5000)
+                    self.guess.predict(roi_sq_crop,bound=roi_sq_crop_bound,torch=False)
+                roi_mask = roi[:,:,3].astype(np.uint8)
                 roi_blend = roi[:,:,5].astype(np.uint8)
                 roi_super_boundary = roi[:,:,6].astype(np.uint8)
                 roi_super_boundary_2 = roi[:,:,7].astype(np.uint8)
@@ -491,6 +547,13 @@ class KNN():
 
         #get the clusters from the mask
 
+    def guess_prepare(self,image_idxs):
+        self.guess=GUESS()
+        for idx in image_idxs:
+            if idx<0:
+                continue
+            img,mask,mask_seg,mask_eroded = self.images[idx]
+            self.guess.prepare_fit(img,mask,mask_seg,torch=False)
 
     def similar_by_hist(self,img):
         hist = self.get_hist(img)
@@ -554,6 +617,7 @@ class KNN():
         super_boundary_model = None
         if self.match_method=='hist':
             patch_model,self.super_boundary_model, self.super_boundary_2_model = self.make_index(similar_hist_images_idxs) #,use_all=True)
+            self.guess_prepare(similar_hist_images_idxs)
         elif self.match_method=='patch':
             patch_model,self.super_boundary_model, self.super_boundary_2_model = self.make_index(similar_patch_images_idxs) #,use_all=True)
         else:
