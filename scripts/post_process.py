@@ -1,7 +1,10 @@
+import sys
+import logging
+
 import numpy as np
 
 from skimage.morphology import reconstruction
-from skimage import img_as_float, exposure
+from skimage import img_as_float, exposure, img_as_ubyte
 from skimage.util import invert
 from scipy import ndimage as ndi
 from skimage.morphology import watershed
@@ -11,6 +14,10 @@ from skimage.morphology import erosion, dilation, binary_dilation, binary_openin
 from skimage.morphology import disk
 from scipy import ndimage as ndi
 
+import cv2
+
+from utils import exceptions_str, save_object
+
 # same as v1, but using skimage instead of cv2
 def parametric_pipeline(img,
                 invert_thresh_pd = .5,
@@ -19,51 +26,51 @@ def parametric_pipeline(img,
                 min_distance=9,
                 use_watershed=False
                 ):
-
-    tmp = img.flatten()
-    if tmp.min() == tmp.max():
+    try:
+        circle_size = np.clip(int(circle_size), 1, 30)
+        if use_watershed:
+            disk_size = np.clip(int(disk_size), 0, 50)
+            min_distance = np.clip(int(min_distance), 1, 50)
+    
+        # Invert the image in case the objects of interest are in the dark side
+        
+        thresh = threshold_otsu(img)
+        img_th = img > thresh
+    
+        if len(np.where(img_th)[0]) > invert_thresh_pd * img.size:
+            img=invert(img)
+    
+        # morphological opening (size tuned on training data)
+        #circle7=cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(circle_size, circle_size))
+        circle7=disk(circle_size / 2.0)
+        img_open = opening(img, circle7)
+        #img_open = cv2.morphologyEx(img, cv2.MORPH_OPEN, circle7)
+        #return img_open
+        
+        thresh = threshold_otsu(img_open)
+        img_th = (img_open > thresh).astype(int)
+    
+        # second morphological opening (on binary image this time)
+        bin_open = binary_opening(img_th, circle7)
+        if not use_watershed:
+            return ndi.label(bin_open)[0]
+    
+        # WATERSHED
+        selem=disk(disk_size)
+        dil = binary_dilation(bin_open, selem)
+        img_dist = ndi.distance_transform_edt(dil)
+        local_maxi = peak_local_max(img_dist,
+                                    min_distance=min_distance,
+                                    indices=False,
+                                    exclude_border=False)
+        markers = ndi.label(local_maxi)[0]
+        cc = watershed(-img_dist, markers, mask=bin_open, compactness=0, watershed_line=True)
+    
+        return cc
+    except:
+        logging.error("Error in parametric pipeline:\n%s" % exceptions_str())
         return np.zeros_like(img)
 
-    circle_size = np.clip(int(circle_size), 1, 30)
-    if use_watershed:
-        disk_size = np.clip(int(disk_size), 0, 50)
-        min_distance = np.clip(int(min_distance), 1, 50)
-
-    # Invert the image in case the objects of interest are in the dark side
-    
-    thresh = threshold_otsu(img)
-    img_th = img > thresh
-    if len(np.where(img_th)[0]) > invert_thresh_pd * img.size:
-        img=invert(img)
-
-
-    # morphological opening (size tuned on training data)
-    #circle7=cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(circle_size, circle_size))
-    circle7=disk(circle_size / 2.0)
-    img_open = opening(img, circle7)
-    #img_open = cv2.morphologyEx(img, cv2.MORPH_OPEN, circle7)
-    #return img_open
-
-    thresh = threshold_otsu(img_open)
-    img_th = (img_open > thresh).astype(int)
-    
-    # second morphological opening (on binary image this time)
-    bin_open = binary_opening(img_th, circle7)
-    if not use_watershed:
-        return ndi.label(bin_open)[0]
-
-    # WATERSHED
-    selem=disk(disk_size)
-    dil = binary_dilation(bin_open, selem)
-    img_dist = ndi.distance_transform_edt(dil)
-    local_maxi = peak_local_max(img_dist,
-                            min_distance=min_distance,
-                             indices=False,
-                           exclude_border=False)
-    markers = ndi.label(local_maxi)[0]
-    cc = watershed(-img_dist, markers, mask=bin_open, compactness=0, watershed_line=True)
-
-    return cc
 
 def parametric_pipeline_v1(img,
                 invert_thresh_pd = 10,

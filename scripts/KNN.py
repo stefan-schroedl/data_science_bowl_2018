@@ -105,6 +105,7 @@ class KNN():
     def prepare_fit(self,img,mask,mask_seg):
         if img.sum() in self.img_sig:
             return 
+        print "ADDING IMAGE TO DB!"
         self.img_sig.add(img.sum())
 	img = (img.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
         mask = (mask.numpy()[0].transpose(1,2,0)).astype(np.uint8)
@@ -342,7 +343,7 @@ class KNN():
             reconstructed = r#np.maximum(r , super_boundary_orig)
         #print reconstructed.shape,"WTF"
         cv2.imshow('reconstructed / orig + 2 / orig',np.concatenate((reconstructed[:,:,None],super_boundary[:,:,None],super_boundary_orig[:,:,None]),axis=1).astype(np.uint8))
-        cv2.waitKey(10000)
+        cv2.waitKey(4000)
         return reconstructed
 
     def label(self,img,seg):
@@ -445,9 +446,6 @@ class KNN():
             x_end=img.shape[1]-1
         if y_end>img.shape[0]:
             y_end=img.shape[0]-1
-        print "XXXX"
-        print x,x+w,y,y+h
-        print x_start,x_end,y_start,y_end
         
         # crop
         #return img[y:y+h,x:x+w,:]
@@ -497,11 +495,11 @@ class KNN():
                 cv2.fillPoly(roi_mask, [contours[x]], 1)
                 roi = np.multiply(reconstructed,roi_mask)
                 roi_img = roi[:,:,:3].astype(np.uint8)
-                print "GUESS IN KNN"
+                #print "GUESS IN KNN"
 		rect = cv2.minAreaRect(contours[x])
                 roi_sq_crop = self.crop(roi_img,cv2.boundingRect(contours[x]),bound=50)
                 roi_boundary = roi[:,:,4].astype(np.uint8)
-                if roi_sq_crop.shape[0]*roi_sq_crop.shape[1]>5000:
+                if False and roi_sq_crop.shape[0]*roi_sq_crop.shape[1]>5000:
                     print rect
                     roi_cropped=self.crop_minAreaRect(roi_img, rect)
                     roi_sq_crop_bound=self.crop(roi_boundary[:,:,None],cv2.boundingRect(contours[x]),bound=50).astype(np.float)
@@ -617,7 +615,7 @@ class KNN():
         super_boundary_model = None
         if self.match_method=='hist':
             patch_model,self.super_boundary_model, self.super_boundary_2_model = self.make_index(similar_hist_images_idxs) #,use_all=True)
-            self.guess_prepare(similar_hist_images_idxs)
+            #self.guess_prepare(similar_hist_images_idxs)
         elif self.match_method=='patch':
             patch_model,self.super_boundary_model, self.super_boundary_2_model = self.make_index(similar_patch_images_idxs) #,use_all=True)
         else:

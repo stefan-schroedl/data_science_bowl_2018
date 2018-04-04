@@ -1,25 +1,41 @@
 #!/usr/bin/env python
-'''
-Fast inplementation of Run-Length Encoding algorithm
-Takes only 200 seconds to process 5635 mask files
-'''
 
+import sys
+import traceback
 import math
 import numpy as np
 import os
 import logging
 import socket
 import errno
+import pickle
+
 import skimage
 from skimage import img_as_float, exposure
+from skimage.morphology import label
 from skimage.io import imread
 from matplotlib import _cntr as cntr
 import matplotlib.pyplot as plt
 import torch
 import torchvision
-from torchvision.transforms import ToPILImage
+from torchvision.transforms import ToTensor, ToPILImage
 
 
+def moving_average(a, n=3):
+    ret = np.cumsum(a, dtype=float)
+    ret[n:] = ret[n:] - ret[:-n]
+    return ret[n - 1:] / n
+        
+def save_object(obj, filename):
+    with open(filename, 'wb') as output:  # Overwrites any existing file.
+        pickle.dump(obj, output, pickle.HIGHEST_PROTOCOL)
+
+def load_object(filename):
+    with open(filename, 'rb') as input:
+        return pickle.load(input)
+
+def exceptions_str():
+        return traceback.format_exception_only(sys.exc_info()[0], sys.exc_info()[1])[0].strip()
 
 def clear_log():
     global LOG
@@ -35,10 +51,14 @@ def set_log(l):
 
 def insert_log(it, k, v):
     global LOG
+    #logging.info('INSERT %s %s %s' % ( it, k, v))
     if len(LOG) > 0:
         last = LOG[-1]
         if last['it'] > it:
-            raise ValueError('trying to change history at %d, current is %d' % it, last['it'])
+            msg = 'trying to change history at %d, current is %d' % (it, last['it'])
+            logging.error(msg)
+            # raise ValueError('trying to change history at %d, current is %d' % (it, last['it']))
+            return
         if last['it'] != it:
             last = {'it':it}
             LOG.append(last)
@@ -47,18 +67,30 @@ def insert_log(it, k, v):
         LOG = [last]
     last[k] = v
 
-def get_latest_log(what):
+def get_latest_log(what, default=None):
     global LOG
-    last = LOG[-1]
-    if not what in last:
+    latest_row = []
+    latest_it = -1
+    for row in LOG[::-1]:
+        if row['it'] > latest_it and what in row:
+            latest_it = row['it']
+            latest_row = row
+
+    if latest_it == -1 or what not in latest_row:
+        msg = 'no such key in log: %s' % what
+        if default is not None:
+            logging.warning(msg)
+            return default, 0
         raise ValueError('no such key in log: %s' % what)
-    return last[what]
+    return latest_row[what], latest_it
 
 
-def get_history_log(what):
+def get_history_log(what, log=None):
     global LOG
-    vals = [x[what] for x in LOG if what in x]
-    its = [x['it'] for x in LOG if what in x]
+    if not log:
+        log=LOG
+    vals = [x[what] for x in log if what in x]
+    its = [x['it'] for x in log if what in x]
     return vals, its
 
 
@@ -67,12 +99,12 @@ def init_logging(opts={}):
     if hasattr(opts, 'log_file') and opts.log_file:
         # slight hack: dollar signs work if config file is read by shell, here we need to strip it
         # another slight hack: sometimes HOSTNAME is not set
-        if not 'HOSTNAME' in os.environ.keys():
+        if 'HOSTNAME' not in os.environ.keys():
             os.environ['HOSTNAME'] = socket.gethostname()
         filename = opts.log_file.replace('$','').format(**os.environ)
     verbose = False
     if hasattr(opts, 'verbose'):
-        verbose = opts.verbose
+        verbose = opts.verbose>0
     logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO, format="[%(asctime)s\t%(process)d\t%(levelname)s]\t%(message\
 )s", datefmt="%Y%m%d %H:%M:%S", filename=filename)
 
@@ -89,6 +121,12 @@ def csv_list(init):
     l=init.split(',')
     l = [x.strip() for x in l if len(x)]
     return l
+
+def int_list(init):
+    l=init.split(',')
+    l = [int(x.strip()) for x in l if len(x)]
+    return l
+
 
 def mkdir_p(path):
     try:
@@ -127,6 +165,29 @@ def is_inverted(img,invert_thresh_pd=10.0):
     img_th = cv2.threshold(img_grey,0,255,cv2.THRESH_OTSU)[1]
 
     return np.sum(img_th==255)>((invert_thresh_pd/10.0)*np.sum(img_th==0))
+
+
+def torch_to_numpy(t):
+    t = t.numpy().squeeze()
+    if t.ndim > 2:
+        t = t.transpose(1,2,0)
+    t = (t/t.max()*255).astype(np.uint8)
+    return t
+
+#def numpy_to_torch(n):
+#    return torch.from_numpy(np.transpose(n, (2, 0, 1))).unsqueeze(0).float()
+
+def numpy_to_torch(n, unsqueeze=False):
+    if n.ndim == 2:
+        n = np.expand_dims(n, 2)
+    if n.ndim == 3 and n.shape[2] == 1:
+        # single channel or mask
+        n_conv = torch.from_numpy(np.transpose(n, (2, 0, 1))).float()
+    else:
+        n_conv = ToTensor()(n)
+    if unsqueeze:
+        n_conv = n_conv.unsqueeze(0)
+    return n_conv
 
 # RLE encoding
 
@@ -176,6 +237,11 @@ def prob_to_rles(x, cut_off = 0.5):
         yield rle_encoding(lab_img==i)
 
 
+def labels_to_rles(lab_img):
+    if lab_img.max()<1:
+        lab_img[0,0] = 1 # ensure at least one prediction per image
+    for i in range(1, lab_img.max()+1):
+        yield rle_encoding(lab_img==i)
 
 
 def read_img_join_masks(img_id, root='../../input/stage1_train/'):
@@ -196,6 +262,7 @@ def read_img_join_masks(img_id, root='../../input/stage1_train/'):
 
 # https://stackoverflow.com/questions/18304722/python-find-contour-lines-from-matplotlib-pyplot-contour
 # add contour to plot, without directly plotting!
+# assuming input is (integer) label mask
 def add_contour(z, ax, color='black'):
 
     z = z.astype(int)
@@ -203,8 +270,8 @@ def add_contour(z, ax, color='black'):
     c = cntr.Cntr(x, y, z)
 
     # trace a contour at z == 0.5
-    for at in range(1, np.amax(z)+1):
-        res = c.trace(at)
+    for at in range(np.amin(z), np.amax(z)):
+        res = c.trace(at + 0.5)
 
         # result is a list of arrays of vertices and path codes
         # (see docs for matplotlib.path.Path)
@@ -213,12 +280,11 @@ def add_contour(z, ax, color='black'):
 
         for seg in segments:
             # for some reason, the coordinates are flipped???
-            p = plt.Polygon([[x[1],x[0]] for x in seg], fill=False, color=color)
+            p = plt.Polygon([[x[1],x[0]] for x in seg], fill=False, color=color, linewidth=2.0)
             ax.add_artist(p)
 
 # display one or several images
-def show_images(img):
-    max_col = 3
+def show_images(img, max_col=3):
     if not isinstance(img, (tuple, list)):
         img = [img]
 
@@ -261,11 +327,11 @@ def show_images(img):
             ax[c,r].axis('off')
     plt.show()
 
-def show_with_contour(img, mask):
+def show_with_contour(img, mask, color='black'):
     fig, ax = plt.subplots(1, 1, figsize=(16, 16))
     ax.grid(None)
     ax.imshow(img)
-    add_contour(mask, ax)
+    add_contour(mask, ax, color)
     plt.tight_layout()
     plt.xticks([])
     plt.yticks([])
@@ -310,6 +376,4 @@ def plot_img_and_hist(image, axes=None, bins=256):
     return ax_img, ax_hist, ax_cdf
 
 if __name__ == '__main__':
-    # check_encoding()
-    print 'hello'
-
+    pass

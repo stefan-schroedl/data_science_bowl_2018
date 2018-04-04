@@ -7,6 +7,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 import matplotlib
 import matplotlib.pyplot as plt
+from skimage.color import rgb2grey
 #from post_process import parametric_pipeline
 
 from utils import add_contour
@@ -57,7 +58,7 @@ def union_intersection(labels, y_pred, exclude_bg=True):
 
 def iou_metric(labels, y_pred, print_table=False):
 
-    if labels.min() == labels.max():
+    if labels.max() == 0 or y_pred.min() == y_pred.max():
         return 0.0
 
     union, intersection, _, _ = union_intersection(labels, y_pred)
@@ -167,19 +168,20 @@ def diagnose_errors(labels, y_pred, threshold=.5, print_message=True):
     return p, p_loc, mean_prec, mean_rec, missed_rate, extra_rate, oseg, useg
 
 
-def show_compare_gt(img, masks, thresh=0.5, **opts):
-    pred_masks = parametric_pipeline(img, **opts)
+def show_compare_gt(img, pred, mask, thresh=0.5, **opts):
+    #pred_masks = parametric_pipeline(img, **opts)
     fig, ax = plt.subplots(1, 1, figsize=(16, 16))
     ax.grid(None)
-    ax.imshow(img)
-    add_contour(masks, ax, 'green')
-    add_contour(pred_masks, ax, 'red')
+    ax.imshow(rgb2grey(img), alpha=0.5),
+    add_contour(mask, ax, 'green')
+    add_contour(pred, ax, 'red')
     plt.tight_layout()
     plt.xticks([])
     plt.yticks([])
     plt.show()
-    return diagnose_errors(masks, pred_masks, thresh, print_message=True)
+    return diagnose_errors(mask, pred, thresh, print_message=True)
 
+    
 #####
 
 class DiceLoss(nn.Module):
@@ -204,6 +206,14 @@ class JaccardLoss(nn.Module):
         prod = torch.sum(prediction * target)
         return 1 - 2 * (prod + 1.0) / (torch.sum(prediction) + torch.sum(target) - prod + 1.0)
 
+    
+##  http://geek.csdn.net/news/detail/126833
+def weighted_binary_cross_entropy_with_logits(logits, labels, weights):
+
+    loss = weights*(logits.clamp(min=0) - logits*labels + torch.log(1 + torch.exp(-logits.abs())))
+    loss = loss.sum()/(weights.sum()+1e-12)
+
+    return loss
 
 def segmentation_loss(output, target):
     bce = nn.BCEWithLogitsLoss()
