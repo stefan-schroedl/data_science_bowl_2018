@@ -14,7 +14,7 @@ import skimage
 from skimage import img_as_float, exposure
 from skimage.morphology import label
 from skimage.io import imread
-from matplotlib import _cntr as cntr
+#from matplotlib import _cntr as cntr
 import matplotlib.pyplot as plt
 import torch
 import torchvision
@@ -25,7 +25,7 @@ def moving_average(a, n=3):
     ret = np.cumsum(a, dtype=float)
     ret[n:] = ret[n:] - ret[:-n]
     return ret[n - 1:] / n
-        
+
 def save_object(obj, filename):
     with open(filename, 'wb') as output:  # Overwrites any existing file.
         pickle.dump(obj, output, pickle.HIGHEST_PROTOCOL)
@@ -77,11 +77,12 @@ def get_latest_log(what, default=None):
             latest_row = row
 
     if latest_it == -1 or what not in latest_row:
-        msg = 'no such key in log: %s' % what
         if default is not None:
-            logging.warning(msg)
             return default, 0
+        msg = 'no such key in log: %s' % what
+        logging.error(msg)
         raise ValueError('no such key in log: %s' % what)
+
     return latest_row[what], latest_it
 
 
@@ -174,10 +175,11 @@ def torch_to_numpy(t):
     t = (t/t.max()*255).astype(np.uint8)
     return t
 
-#def numpy_to_torch(n):
-#    return torch.from_numpy(np.transpose(n, (2, 0, 1))).unsqueeze(0).float()
 
 def numpy_to_torch(n, unsqueeze=False):
+    n = np.ascontiguousarray(n)
+           # to avoid 'negative stride' error -
+           # see https://discuss.pytorch.org/t/problem-with-reading-pfm-image/2924
     if n.ndim == 2:
         n = np.expand_dims(n, 2)
     if n.ndim == 3 and n.shape[2] == 1:
@@ -188,6 +190,7 @@ def numpy_to_torch(n, unsqueeze=False):
     if unsqueeze:
         n_conv = n_conv.unsqueeze(0)
     return n_conv
+
 
 # RLE encoding
 

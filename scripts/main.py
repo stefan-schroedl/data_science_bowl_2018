@@ -44,7 +44,7 @@ from adjust_learn_rate import get_learning_rate, adjust_learning_rate
 from KNN import *
 
 import nuc_trans
-from nuc_trans import as_segmentation, separate_touching_nuclei, erode_mask, redilate_mask, noop_augmentation, nuc_augmentation
+
 import dataset
 from dataset import NucleusDataset
 
@@ -133,8 +133,8 @@ parser.add('--epochs', default=1, type=int, metavar='N',
            help='number of total epochs to run [default: %(default)s]')
 parser.add('--start-epoch', default=0, type=int, metavar='N',
            help='manual epoch number (useful on restarts)')
-parser.add('-b', '--batch-size', default=256, type=int,
-           metavar='N', help='mini-batch size (default: 256)')
+parser.add('-b', '--batch-size', default=1, type=int,
+           metavar='N', help='mini-batch size [default: %(default)s]')
 parser.add('--grad-accum', default=1, type=int,
            metavar='N', help='number of batches between gradient descent [default: %(default)s]')
 parser.add('--lr', '--learning-rate', default=0.001, type=float,
@@ -340,7 +340,7 @@ def torch_pred_to_np_label(pred, sz=2, max_clusters_for_dilation=100, thresh=0.0
     if not isinstance(pred, np.ndarray):
         pred_np = pred.data.cpu().numpy().squeeze()
     img_th = (pred_np > thresh).astype(int)
-    img_l = redilate_mask(img_th, sz=sz, skip_clusters=max_clusters_for_dilation)
+    img_l = nuc_trans.redilate_mask(img_th, sz=sz, skip_clusters=max_clusters_for_dilation)
     return img_l, pred_np
 
 
@@ -358,22 +358,22 @@ def validate(model, loader, criterion, calc_iou=False, max_clusters_for_dilation
     cnt = 0
     sum_iou = 0.0
 
-    for i, row in tqdm(enumerate(loader), desc='test', total=loader.__len__()):
+    for i, row in tqdm(enumerate(loader), desc='valid', total=loader.__len__()):
 
-        img, labels_seg = Variable(dev(row['images']), volatile=True), Variable(dev(row['masks_seg']), volatile=True)
+        img, labels_bin = Variable(dev(row['images_prep']), volatile=True), Variable(dev(row['masks_bin']), volatile=True)
         pred = model(img)
         pred_lab = pred
 
         # HACK for upper bound/sanity check
-        #pred = row['masks_seg']
-        #pred_lab = Variable(scipy.ndimage.label(row['masks_seg'])[0], volatile=True)
+        #pred = row['masks_bin']
+        #pred_lab = Variable(scipy.ndimage.label(row['masks_bin'])[0], volatile=True)
         #pred_lab = Variable(row['masks_prep'], volatile=True)
         # hmmm ... loss can actually become negative if too good??? numerical problem???
         #pred[pred<=0] = -0.693
         #pred[pred>0] = 0.693
         #pred = Variable(pred, volatile=True)
 
-        loss = criterion(pred, labels_seg)
+        loss = criterion(pred, labels_bin)
         running_loss += loss.data[0]
         iou = 0.0
         cnt += 1
@@ -386,7 +386,7 @@ def validate(model, loader, criterion, calc_iou=False, max_clusters_for_dilation
                     fig, ax = plt.subplots(1, 2, figsize=(50, 50))
                     plt.tight_layout()
                     ax[0].imshow(torch_to_numpy(img.data[0]))
-                    ax[1].imshow(torch_to_numpy(labels_seg.data))
+                    ax[1].imshow(torch_to_numpy(labels_bin.data))
                     fig.savefig('img_debug_gt.png')
                     plt.close()
                     fig, ax = plt.subplots(1, 2, figsize=(50, 50))
@@ -417,8 +417,8 @@ def train_knn(
         global_state):
     running_loss = 0.0
     cnt = 0
-    for global_state['it'], (img, (labels, labels_seg)) in tqdm(enumerate(train_loader, global_state['it'] + 1)):
-        model.prepare_fit(img,labels,labels_seg)
+    for global_state['it'], (img, (labels, labels_bin)) in tqdm(enumerate(train_loader, global_state['it'] + 1)):
+        model.prepare_fit(img,labels,labels_bin)
 
         cnt = cnt + 1
 
@@ -497,153 +497,147 @@ def train_cnn (train_loader,
     is_lbfgs = global_state['args'].optim == 'lbfgs'
     accum_total = global_state['args'].grad_accum
 
-    # slightly ugly: to accommodate  lbfgs with gradient accumulation, we need to control the dataset with low
-    # level function
-
-    #for global_state['it'], (img, (labels, labels_seg)) in tqdm(enumerate(train_loader, global_state['it'] + 1)):
-
-    _train_loader = train_loader.__iter__()
+    # lbfgs has to be called with a closure, in contrast to other optimizers
 
     # PYTHON WEIRDNESS: using scalar inside closure gives error! Therefore using arrays with one element
     # https://stackoverflow.com/questions/4851463/python-closure-write-to-variable-in-parent-scope
 
     acc = [] # train data buffer, needed for gradient accumulation with lbfgs
-    # TODO improve naming of stats
-    inner_cnt = [0]
-    running_loss = AverageMeter()
-    running_final_loss = AverageMeter()
+    running_loss = AverageMeter() # training loss before gradient step
+    epoch_loss = AverageMeter()
     weight_stats = AverageMeter()
-    iou_stats = AverageMeter()
-    loss_stats = AverageMeter()
-    final_stats = AverageMeter() # only meaningful for lbfgs, loss before last descent in closure
+    epoch_iou = AverageMeter()
+
+    # only meaningful for lbfgs, loss before last descent in closure
+    epoch_loss_last_closure = AverageMeter()
+    running_loss_last_closure = AverageMeter()
+    closure_cnt = [0] # (only) for lbfgs, closure can be called multiple times
 
     # helper function to do forward and accumulative backward passes on acc buffer
+
     def closure():
         optimizer.zero_grad()
-        logging.debug('start inner %d' % inner_cnt[0])
+        logging.debug('start closure %d' % closure_cnt[0])
         loss = 0
-        running_final_loss.reset()
-        for  row in tqdm(acc, 'train'):
-            img, labels_seg = Variable(dev(row['images']), requires_grad=False), Variable(dev(row['masks_prep_seg']), requires_grad=False)
+        running_loss_last_closure.reset()
+        for  mb_acc in acc:
+            img, labels_bin = Variable(dev(mb_acc['images_prep']), requires_grad=False), Variable(dev(mb_acc['masks_prep_bin']), requires_grad=False)
             pred = model(img)
             if global_state['args'].use_instance_weights > 0:
-                #w = backprop_weight(row['masks'].numpy().squeeze(), pred.data[0].numpy().squeeze(), global_state)
-                w = backprop_weight(row['masks'].numpy().squeeze(), None, global_state)
-                weight_stats.update(w)
-                criterion.weight = dev(torch.FloatTensor([w]))
-                #criterion.weight = row['ov'] * w
-                #criterion.weight = pred.data.clone().fill_(w)
+                w = mb_acc['num_nuc_inv']
+                for i in range(w.size()[0]):
+                    weight_stats.update(w[i])
+                w = w.float().unsqueeze(1).unsqueeze(1).unsqueeze(1) # make size broadcastable with batch dimension
+                criterion.weight = dev(w)
 
-            loss = criterion(pred, labels_seg)
-            running_final_loss.update(loss.data[0])
-            if inner_cnt[0] == 0: # for lbfgs, only record the first eval!
+            loss = criterion(pred, labels_bin)
+            running_loss_last_closure.update(loss.data[0])
+            if closure_cnt[0] == 0: # for lbfgs, only record the first eval!
                 running_loss.update(loss.data[0])
-                loss_stats.update(loss.data[0])
-                pred_l, _ = torch_pred_to_np_label(pred, max_clusters_for_dilation=50) # dilation is slow, skip!
-                iou_stats.update(iou_metric(row['masks'].numpy().squeeze(), pred_l))
+                epoch_loss.update(loss.data[0])
+                for n in range(pred.size()[0]):
+                    pred_l, _ = torch_pred_to_np_label(pred[n], max_clusters_for_dilation=50) # dilation is slow, skip!
+                    epoch_iou.update(iou_metric(mb_acc['masks_prep'][n].numpy().squeeze(), pred_l))
             logging.debug('loss: %s', loss.data.cpu().numpy()[0])
-
             loss.backward()
 
         if global_state['args'].clip_gradient > 0:
             gradi = torch.nn.utils.clip_grad_norm(model.parameters(), global_state['args'].clip_gradient)
-            if inner_cnt[0] == 0: # for lbfgs, only record the first eval!
+            if closure_cnt[0] == 0: # for lbfgs, only record the first eval!
                 grad[0] = gradi
 
-        inner_cnt[0] += 1
+        closure_cnt[0] += 1
 
-        final_stats.update(running_final_loss)
+        epoch_loss_last_closure.update(running_loss_last_closure)
         return loss
 
-    more_data = True
-    while more_data:
+    acc = []
 
-        acc = []
-        inner_cnt = [0]
-        running_loss.reset()
-        running_final_loss.reset()
-        weight_stats.reset()
-        grad = [float('nan')]
+    total_batches = len(train_loader)
+    it_start = global_state['it']
+    it_last = it_start + total_batches
+    for global_state['it'], mb in tqdm(enumerate(train_loader, global_state['it'] + 1), desc='train', total=total_batches):
+
         it = global_state['it']
 
+        acc.append(mb)
+        if len(acc) < global_state['args'].grad_accum and it < it_last: # last grad accum can be incomplete
+            continue
+
+        closure_cnt = [0]
+        running_loss.reset()
+        running_loss_last_closure.reset()
+        weight_stats.reset()
+        grad = [float('nan')]
+
+        # learn!
         model.train()
-        for i in range(global_state['args'].grad_accum):
-            try:
-                acc.append(_train_loader.next())
-            except StopIteration:
-                more_data = False
-                break
+        if not is_lbfgs:
+            closure()
+            optimizer.step()
+        else:
+            optimizer.step(closure)
 
         num_acc = len(acc)
-        if num_acc > 0:
+        acc = []
+        train_loss = running_loss.avg
 
-            if not is_lbfgs:
-                closure()
-                optimizer.step()
-            else:
-                optimizer.step(closure)
+        blowup = False
+        if math.isnan(train_loss):
+            msg = 'iteration %d - training blew up ...' % it
+            logging.error(msg)
+            raise TrainingBlowupError(msg)
 
-            train_loss = running_loss.avg
+        validated = False # when doing grad accum, don't print validation results twice
+        for i in range(it - num_acc + 1, it + 1):
+            if i % eval_every == 0 and not validated:
+                l, iou, t = validate(model, valid_loader, criterion, True)
+                time_val += t
+                n_val += len(valid_loader)
+                insert_log(i, 'running_valid_loss', l)
+                insert_log(i, 'running_valid_iou', iou)
+                validated = True
 
-            blowup = False
-            if math.isnan(train_loss):
-                msg = 'iteration %d - training blew up ...' % it
-                logging.error(msg)
-                raise TrainingBlowupError(msg)
+            iou = get_latest_log('running_valid_iou', 0.0)[0]
+            l = get_latest_log('running_valid_loss', 0.0)[0]
 
-            insert_log(it, 'train_loss', train_loss)
+            if i % print_every == 0:
+                logging.info('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f\tiou: %.3f\tlr: %g' %
+                             (epoch, i, train_loss, l, iou, global_state['lr']))
+                if global_state['args'].use_instance_weights > 0:
+                    logging.debug('[%d, %d]\tavg instance weight: %.3f' %
+                                  (epoch, i, global_state['bp_wt_sum'] /  global_state['bp_wt_cnt']))
+                save_plot(os.path.join(global_state['args'].out_dir, 'progress.png'), global_state['args'].experiment)
 
-            if not math.isnan(grad[0]):
-                insert_log(it, 'grad', grad[0])
+            if i % save_every == 0:
+                is_best = False
+                if global_state['best_loss'] > l:
+                    global_state['best_loss'] = l
+                    global_state['best_it'] = global_state['it']
+                    is_best = True
+                save_checkpoint(
+                    get_checkpoint_file(global_state['args']),
+                    model,
+                    optimizer,
+                    global_state,
+                    is_best)
 
-            if global_state['args'].use_instance_weights > 0:
-                insert_log(it, 'bp_wt', weight_stats.avg)
+        insert_log(it, 'running_train_loss', train_loss)
 
-            if is_lbfgs:
-                final_train_loss = running_final_loss.avg
-                logging.debug('initial loss: %.3f, final loss: %.3f' %(train_loss, final_train_loss))
-                insert_log(it, 'final_train_loss', final_train_loss)
+        if not math.isnan(grad[0]):
+            insert_log(it, 'running_grad', grad[0])
 
-            validated = False
-            for i in range(it, it + num_acc):
+        if global_state['args'].use_instance_weights > 0:
+            insert_log(it, 'running_wt', weight_stats.avg)
 
-                if i % eval_every == 0 and not validated:
-                    l, iou, t = validate(model, valid_loader, criterion, True)
-                    time_val += t
-                    n_val += len(valid_loader)
-                    insert_log(i, 'valid_loss', l)
-                    insert_log(i, 'valid_iou', iou)
-                    validated = True
-
-                iou = get_latest_log('valid_iou', 0.0)[0]
-                l = get_latest_log('valid_loss', 0.0)[0]
-
-                if i % print_every == 0:
-                    logging.info('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f\tiou: %.3f\tlr: %g' %
-                                 (epoch, i, train_loss, l, iou, global_state['lr']))
-                    if global_state['args'].use_instance_weights > 0:
-                        logging.debug('[%d, %d]\tavg instance weight: %.3f' %
-                                      (epoch, i, global_state['bp_wt_sum'] /  global_state['bp_wt_cnt']))
-                    save_plot(os.path.join(global_state['args'].out_dir, 'progress.png'), global_state['args'].experiment)
-
-                if i % save_every == 0:
-                    is_best = False
-                    if global_state['best_loss'] > l:
-                        global_state['best_loss'] = l
-                        global_state['best_it'] = global_state['it']
-                        is_best = True
-                    save_checkpoint(
-                        get_checkpoint_file(global_state['args']),
-                        model,
-                        optimizer,
-                        global_state,
-                        is_best)
-
-            global_state['it'] += num_acc
+        if is_lbfgs:
+            final_train_loss = running_loss_last_closure.avg
+            logging.debug('initial loss: %.3f, final loss: %.3f' %(train_loss, final_train_loss))
+            insert_log(it, 'running_loss_last_closure', final_train_loss)
 
     time_end = time.time()
     time_total = time_end - time_start
-    return global_state['it'], global_state['best_loss'], global_state['best_it'], loss_stats.avg, iou_stats.avg, final_stats.avg, time_total, time_val, n_val
+    return global_state['it'], global_state['best_loss'], global_state['best_it'], epoch_loss.avg, epoch_iou.avg, epoch_loss_last_closure.avg, time_total, time_val, n_val
 
 
 def baseline(
@@ -654,23 +648,23 @@ def baseline(
 
     m = 0.0
     cnt = 0.0
-    for i, (img, (labels, labels_seg)) in enumerate(train_loader):
+    for i, (img, (labels, labels_bin)) in enumerate(train_loader):
         if i > it:
             break
-        m += labels_seg[0].sum()
-        cnt += labels_seg[0].numel()
+        m += labels_bin[0].sum()
+        cnt += labels_bin[0].numel()
     m = m / cnt
 
     running_loss = 0.0
 
     cnt = 0
-    for i, (img, (labels,labels_seg)) in enumerate(valid_loader):
-        pred = labels_seg.clone()
+    for i, (img, (labels,labels_bin)) in enumerate(valid_loader):
+        pred = labels_bin.clone()
         pred = torch.clamp(pred, m, m)
-        img, labels = Variable(img), Variable(labels_seg)
+        img, labels = Variable(img), Variable(labels_bin)
         pred = Variable(pred)
 
-        loss = criterion(pred, labels_seg)
+        loss = criterion(pred, labels_bin)
 
         running_loss += loss.data[0]
         cnt += 1
@@ -760,8 +754,8 @@ def main():
 
     elif args.model == 'cnn':
         trainer = train_cnn
-        #model = CNN(32)
-        model = UNetClassify(layers=4, init_filters=32)
+        model = CNN(32)
+        #model = UNetClassify(layers=4, init_filters=32)
         if args.weight_init != 'default':
            init_weights(model, args.weight_init)
         model = dev(model)
@@ -842,46 +836,31 @@ def main():
 
     # Data loading
     def load_data():
-        return NucleusDataset(args.data, stage_name=args.stage, group_name=args.group, preprocess=erode_mask, transform=nuc_augmentation)
+        return NucleusDataset(args.data, stage_name=args.stage, group_name=args.group, dset_type = 'test' if args.calc_pred > 0 else 'train')
     timer = timeit.Timer(load_data)
     t,dset = timer.timeit(number=1)
     logging.info('load time: %.1f\n' % t)
 
-    # hack: this image format (1388, 1040) occurs only ones, stratify complains ..
-    dset.data_df = dset.data_df[dset.data_df['size'] != (1388, 1040)]
-
     stratify = None
     if args.stratify > 0:
-        stratify = dset.data_df['images'].map(lambda x: '{}'.format(x.size))
-    train_dset, valid_dset = dset.train_test_split(test_size=args.valid_fraction, random_state=args.random_seed, shuffle=True, stratify=stratify, test_transform=noop_augmentation)
-    train_loader = DataLoader(train_dset, batch_size=1, shuffle=True, pin_memory=(args.cuda > 0), num_workers=args.workers)
-    valid_loader = DataLoader(valid_dset, batch_size=1, shuffle=True, pin_memory=(args.cuda > 0), num_workers=args.workers)
-    if args.calc_iou > 0 or args.calc_pred > 0:
-        train_dset.transform = noop_augmentation()
+        # hack: this image format (1388, 1040) occurs only once, stratify complains ..
+        dset.data_df = dset.data_df[dset.data_df['size'] != (1388, 1040)]
 
-    if args.calc_iou > 0:
-        loss, iou, _ = validate(model, train_loader, criterion, calc_iou=True, max_clusters_for_dilation=1e20)
-        msg = 'train: loss = %f, iou = %f' % (loss, iou)
-        logging.info(msg)
-        print msg
-        loss, iou, _ = validate(model, valid_loader, criterion, calc_iou=True, max_clusters_for_dilation=1e20)
-        msg = 'test: loss = %f, iou = %f' % (loss, iou)
-        logging.info(msg)
-        print msg
-        return
+        stratify = dset.data_df['images'].map(lambda x: '{}'.format(x.size))
 
     if args.calc_pred > 0:
+        dset.preprocess()
         # calculate predictions
         model.eval()
         #model.train() # for some reason, batch norm doesn't work properly with eval mode!!!
         preds = []
         for i in tqdm(range(len(dset.data_df))):
-            img = dset.data_df['images'].iloc[i]
+            img = dset.data_df['images_prep'].iloc[i]
             pred = model(Variable(dev(numpy_to_torch(img, True)), volatile=True))
             pred_l, pred = torch_pred_to_np_label(pred, max_clusters_for_dilation=1e20) # highest precision
             preds.append(pred_l)
 
-            if 1:
+            if 0:
                 fig, ax = plt.subplots(1, 3, figsize=(50, 50))
                 plt.tight_layout()
                 ax[0].imshow(img)
@@ -906,13 +885,40 @@ def main():
 
         return
 
+    # split data
+    batch_size_train = args.batch_size
+    if args.calc_iou > 0 or args.calc_pred > 0:
+        # originals have uneven dimensions!
+        batch_size_train = 1
+    batch_size_valid = 1
+    train_dset, valid_dset = dset.train_test_split(test_size=args.valid_fraction, random_state=args.random_seed, shuffle=True, stratify=stratify)
+    train_loader = DataLoader(train_dset, batch_size=batch_size_train, shuffle=True, pin_memory=(args.cuda > 0), num_workers=args.workers)
+    valid_loader = DataLoader(valid_dset, batch_size=batch_size_valid, shuffle=True, pin_memory=(args.cuda > 0), num_workers=args.workers)
+
+    if args.calc_iou > 0:
+        train_dset.dset_type = 'valid'
+
+    train_dset.preprocess()
+    valid_dset.preprocess()
+
+    if args.calc_iou > 0:
+        loss, iou, _ = validate(model, train_loader, criterion, calc_iou=True, max_clusters_for_dilation=1e20)
+        msg = 'train: loss = %f, iou = %f' % (loss, iou)
+        logging.info(msg)
+        print msg
+        loss, iou, _ = validate(model, valid_loader, criterion, calc_iou=True, max_clusters_for_dilation=1e20)
+        msg = 'valid: loss = %f, iou = %f' % (loss, iou)
+        logging.info(msg)
+        print msg
+        return
+
     #l, iou = validate(model, valid_loader, criterion, True)
     #logging.info('initial validation: %.3f %.3f\n' % (l, iou))
     #global_state['best_loss'] = l
     #global_state['best_it'] = 0
 
     if args.resume is None:
-        insert_log(0, 'valid_loss', l)
+        insert_log(0, 'running_valid_loss', l)
 
     logging.info('command line options:\n')
     for k in global_state['args'].__dict__:
@@ -936,8 +942,8 @@ def main():
                           epoch_final_loss,
                           time_total,
                           time_val,
-                          1.0 * time_total / len(train_loader),
-                          1.0 * (time_total - time_val) / len(train_loader),
+                          1.0 * time_total / len(train_loader) / batch_size_train,
+                          1.0 * (time_total - time_val) / len(train_loader) / batch_size_train,
                           1.0 * time_val / n_val if n_val > 0 else 0.0))
 
 
@@ -956,7 +962,7 @@ def main():
 
             insert_log(global_state['it'], 'epoch_train_loss', epoch_loss)
             insert_log(global_state['it'], 'epoch_final_loss', epoch_final_loss)
-            insert_log(global_state['it'], 'train_iou', epoch_iou)
+            insert_log(global_state['it'], 'epoch_train_iou', epoch_iou)
             insert_log(global_state['it'], 'lr', global_state['lr'])
 
             if global_state['args'].scheduler != 'none':

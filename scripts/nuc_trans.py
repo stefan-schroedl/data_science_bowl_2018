@@ -4,23 +4,32 @@ import logging
 import math
 import numpy as np
 
+import matplotlib
+import matplotlib.pyplot as plt
+
+# import torchvision.transforms as transforms
+
 import imgaug as ia
 from imgaug import augmenters as iaa
 
 import skimage
 import skimage.color
 import skimage.morphology
+from skimage import transform, img_as_ubyte
 from scipy import ndimage as ndi
 
+
 # preprocessing
-def as_segmentation(img):
-        return (img>0).astype(np.uint8)
+
+def binarize(img):
+    return (img > 0).astype(np.uint8)
+
 
 def separate_touching_nuclei(labeled_mask, sz=2):
     struc = skimage.morphology.disk(sz)
 
     img_sum = np.zeros(labeled_mask.shape)
-    for j in range(1, labeled_mask.max()+1):
+    for j in range(1, labeled_mask.max() + 1):
         m = (labeled_mask == j).astype(np.uint8)
         m = skimage.morphology.binary_dilation(m, struc)
         img_sum += m
@@ -29,53 +38,118 @@ def separate_touching_nuclei(labeled_mask, sz=2):
     mask_corrected = np.where(ov == 0, labeled_mask, 0)
     return mask_corrected, ov
 
+
 # erode masks by one pixel for training, dilate the prediction back at the end
 
 def erode_mask(mask, sz=2):
-        struc = skimage.morphology.disk(sz)
-        return np.where(ndi.binary_erosion(mask, structure=struc, border_value=1), mask, 0)
+    struc = skimage.morphology.disk(sz)
+    return np.where(
+    ndi.binary_erosion(
+        mask,
+        structure=struc,
+        border_value=1),
+        mask,
+         0)
+
 
 def redilate_mask(mask_seg, sz=2, skip_clusters=1e20):
-        mask_l, n = ndi.label(mask_seg)
-        if n >= skip_clusters:
-                # too slow, use shortcut
-                return mask_l
-        struc = skimage.morphology.disk(sz)
-        mask_dil = np.zeros(mask_l.shape, dtype=np.int32)
+    mask_l, n = ndi.label(mask_seg)
+    if n >= skip_clusters:
+            # too slow, use shortcut
+            return mask_l
+    struc = skimage.morphology.disk(sz)
+    mask_dil = np.zeros(mask_l.shape, dtype=np.int32)
 
-        for cluster in range(1, n + 1):
-                cur = (mask_l == cluster)
-                cur = skimage.morphology.binary_dilation(cur, struc)
-                mask_dil = np.where(cur, cluster, mask_dil)
-        return mask_dil
+    for cluster in range(1, n + 1):
+        cur = (mask_l == cluster)
+        cur = skimage.morphology.binary_dilation(cur, struc)
+        mask_dil = np.where(cur, cluster, mask_dil)
+    return mask_dil
 
 def noop_augmentation():
-        return iaa.Sequential([iaa.Noop()])
+    return iaa.Sequential([iaa.Noop()])
 
 def nuc_augmentation():
-        return iaa.Sequential([
-                iaa.Fliplr(0.5),
-                iaa.Flipud(0.5),
-                iaa.OneOf(iaa.Affine(rotate=(-15, 15),
-                                     mode=ia.ALL,
-                                     order=[0, 1]),
-                          iaa.Affine(shear=(-15, 15),
-                                     mode=ia.ALL,
-                                     order=[0, 1])),
-                iaa.OneOf(iaa.Scale((0.5,1.0)),
-                          iaa.Crop(percent=(0.0,0.25), keep_size=False))])
+    return iaa.Sequential([
+        iaa.Fliplr(0.5),
+        iaa.Flipud(0.5),
+        iaa.OneOf(iaa.Affine(rotate=(-15, 15),
+                             mode=ia.ALL,
+                             order=[0, 1]),
+                  iaa.Affine(shear=(-15, 15),
+                             mode=ia.ALL,
+                             order=[0, 1])),
+        iaa.OneOf(iaa.Scale((0.5,1.0)),
+                  iaa.Crop(percent=(0.0,0.25), keep_size=False))])
 
+def preprocess_img(x, w=None, h=None):
+    if w is not None:
+        x = transform.resize(x, (w, h))
+        # transform.resize() changes type to float!
+        x = img_as_ubyte(x)
+    return x
+
+def preprocess_mask(x, w=None, h=None):
+    if w is not None:
+        x = transform.resize(x, (w, h))
+        # transform.resize() changes type to float!
+        x = img_as_ubyte(x)
+    x = erode_mask(x)
+    return x
+
+
+########
+# from https://github.com/neptune-ml/open-solution-data-science-bowl-2018/wiki
+
+def affine_augmentation():
+    return iaa.Sequential([
+        # General
+        iaa.SomeOf((1, 2),
+                   [iaa.Fliplr(0.5),
+                    iaa.Flipud(0.5),
+                    iaa.Affine(rotate=(0, 360),
+                               translate_percent=(-0.1, 0.1)),
+                    iaa.CropAndPad(percent=(-0.25, 0.25), pad_cval=0)
+                   ]),
+        # Deformations
+        iaa.PiecewiseAffine(scale=(0.00, 0.06))
+    ], random_order=True)
+
+
+def color_augmentation():
+    return iaa.Sequential([
+        # Color
+        iaa.OneOf([
+            iaa.Sequential([
+                iaa.ChangeColorspace(from_colorspace="RGB", to_colorspace="HSV"),
+                iaa.WithChannels(0, iaa.Add((0, 100))),
+                        iaa.ChangeColorspace(from_colorspace="HSV", to_colorspace="RGB")]),
+            iaa.Sequential([
+                iaa.ChangeColorspace(from_colorspace="RGB", to_colorspace="HSV"),
+                iaa.WithChannels(1, iaa.Add((0, 100))),
+                iaa.ChangeColorspace(from_colorspace="HSV", to_colorspace="RGB")]),
+            iaa.Sequential([
+                iaa.ChangeColorspace(from_colorspace="RGB", to_colorspace="HSV"),
+                iaa.WithChannels(2, iaa.Add((0, 100))),
+                iaa.ChangeColorspace(from_colorspace="HSV", to_colorspace="RGB")]),
+            iaa.WithChannels(0, iaa.Add((0, 100))),
+            iaa.WithChannels(1, iaa.Add((0, 100))),
+                iaa.WithChannels(2, iaa.Add((0, 100)))
+        ])
+    ], random_order=True)
+
+########
 
 def random_rotate90_transform2(*images):
     k = np.random.randint(4)
     return [random_rotate90_transform1(img, k) for img in images]
 
 def random_rotate90_transform1(image, k):
-        if k == 0:
-            pass
-        elif k == 1:
-            image = image.transpose(1,0,2)
-            image = np.flip(image,0).copy()
+    if k == 0:
+        pass
+    elif k == 1:
+        image = image.transpose(1,0,2)
+        image = np.flip(image,0).copy()
         if k == 2:
             image = np.flip(np.flip(image,0),1).copy()
         elif k == 3:
