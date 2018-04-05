@@ -70,14 +70,14 @@ class TrainingBlowupError(Exception):
 
 
 def save_plot(fname, title=None):
-    train_loss, train_loss_it = get_history_log('train_loss')
-    valid_loss, valid_loss_it = get_history_log('valid_loss')
+    train_loss, train_loss_it = get_history_log('running_train_loss')
+    valid_loss, valid_loss_it = get_history_log('running_valid_loss')
     epoch_loss, epoch_loss_it = None, None
     try:
         epoch_loss, epoch_loss_it = get_history_log('epoch_train_loss')
     except:
         pass
-    grad, grad_it = get_history_log('grad')
+    grad, grad_it = get_history_log('running_grad')
 
     fig, ax = plt.subplots(2, 1)
     if title is not None:
@@ -344,7 +344,8 @@ def torch_pred_to_np_label(pred, sz=2, max_clusters_for_dilation=100, thresh=0.0
     return img_l, pred_np
 
 
-def validate(model, loader, criterion, calc_iou=False, max_clusters_for_dilation=100):
+def validate(model, loader, criterion, calc_iou=False, max_clusters_for_dilation=100, calc_baseline=False):
+    # calc_baseline=True -> calculate loss when predicting constant global average
 
     time_start = time.time()
 
@@ -354,15 +355,25 @@ def validate(model, loader, criterion, calc_iou=False, max_clusters_for_dilation
     if isinstance(criterion, nn.BCEWithLogitsLoss):
         criterion.weight = dev(torch.ones(1)) # reset weight if it was changed!
 
-    running_loss = 0.0
-    cnt = 0
-    sum_iou = 0.0
+    avg_loss = AverageMeter()
+    avg_iou = AverageMeter()
+    if not calc_iou:
+        avg_iou.update(0.0)
+
+    avg_mask = AverageMeter()
+    if calc_baseline:
+        for i, row in enumerate(loader):
+            avg_mask.update(row['masks_bin'].numpy().mean())
 
     for i, row in tqdm(enumerate(loader), desc='valid', total=loader.__len__()):
 
         img, labels_bin = Variable(dev(row['images_prep']), volatile=True), Variable(dev(row['masks_bin']), volatile=True)
-        pred = model(img)
-        pred_lab = pred
+
+        if not calc_baseline:
+            pred = model(img)
+            pred_lab = pred
+        else:
+            pred = dev(torch.ones_like(labels_bin) * avg_mask.avg)
 
         # HACK for upper bound/sanity check
         #pred = row['masks_bin']
@@ -374,12 +385,12 @@ def validate(model, loader, criterion, calc_iou=False, max_clusters_for_dilation
         #pred = Variable(pred, volatile=True)
 
         loss = criterion(pred, labels_bin)
-        running_loss += loss.data[0]
-        iou = 0.0
-        cnt += 1
+        avg_loss.update(loss.data[0])
+
         if calc_iou:
             pred_l, _ = torch_pred_to_np_label(pred, max_clusters_for_dilation=max_clusters_for_dilation)
             iou = iou_metric(row['masks'].numpy().squeeze(), pred_l)
+            avg_iou.update(iou)
             if 0:
                 logging.info('%s\t%f\t%f' % (row['id'], loss.data[0], iou))
                 if row['id'][0] == 'bbfc4aab5645637680fa0ef00925eea733b93099f1944c0aea09b78af1d4eef2':
@@ -395,12 +406,8 @@ def validate(model, loader, criterion, calc_iou=False, max_clusters_for_dilation
                     fig.savefig('img_debug.png')
                     plt.close()
 
-            sum_iou += iou
-    l = running_loss / cnt
-    iou = sum_iou / cnt
-
     time_end = time.time()
-    return l, iou, time_end - time_start
+    return avg_loss.avg, avg_iou.avg, time_end - time_start
 
 
 def train_knn(
@@ -640,39 +647,7 @@ def train_cnn (train_loader,
     return global_state['it'], global_state['best_loss'], global_state['best_it'], epoch_loss.avg, epoch_iou.avg, epoch_loss_last_closure.avg, time_total, time_val, n_val
 
 
-def baseline(
-        train_loader,
-        valid_loader,
-        criterion,
-        it):
-
-    m = 0.0
-    cnt = 0.0
-    for i, (img, (labels, labels_bin)) in enumerate(train_loader):
-        if i > it:
-            break
-        m += labels_bin[0].sum()
-        cnt += labels_bin[0].numel()
-    m = m / cnt
-
-    running_loss = 0.0
-
-    cnt = 0
-    for i, (img, (labels,labels_bin)) in enumerate(valid_loader):
-        pred = labels_bin.clone()
-        pred = torch.clamp(pred, m, m)
-        img, labels = Variable(img), Variable(labels_bin)
-        pred = Variable(pred)
-
-        loss = criterion(pred, labels_bin)
-
-        running_loss += loss.data[0]
-        cnt += 1
-
-    return running_loss/cnt, m
-
-
-# switch to cpu or gpu
+# choose cpu or gpu
 def dev(x):
     return x
 
@@ -886,8 +861,9 @@ def main():
         return
 
     # split data
+    calc_baseline = False
     batch_size_train = args.batch_size
-    if args.calc_iou > 0 or args.calc_pred > 0:
+    if args.calc_iou > 0 or args.calc_pred > 0 or calc_baseline:
         # originals have uneven dimensions!
         batch_size_train = 1
     batch_size_valid = 1
@@ -895,7 +871,7 @@ def main():
     train_loader = DataLoader(train_dset, batch_size=batch_size_train, shuffle=True, pin_memory=(args.cuda > 0), num_workers=args.workers)
     valid_loader = DataLoader(valid_dset, batch_size=batch_size_valid, shuffle=True, pin_memory=(args.cuda > 0), num_workers=args.workers)
 
-    if args.calc_iou > 0:
+    if args.calc_iou > 0 or calc_baseline:
         train_dset.dset_type = 'valid'
 
     train_dset.preprocess()
@@ -908,6 +884,17 @@ def main():
         print msg
         loss, iou, _ = validate(model, valid_loader, criterion, calc_iou=True, max_clusters_for_dilation=1e20)
         msg = 'valid: loss = %f, iou = %f' % (loss, iou)
+        logging.info(msg)
+        print msg
+        return
+
+    if calc_baseline:
+        loss, _, _ = validate(model, train_loader, criterion, calc_iou=False, calc_baseline=True)
+        msg = 'train: loss = %f' % loss
+        logging.info(msg)
+        print msg
+        loss, _, _ = validate(model, valid_loader, criterion, calc_iou=False, calc_baseline=True)
+        msg = 'valid: loss = %f' % loss
         logging.info(msg)
         print msg
         return

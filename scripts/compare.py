@@ -33,7 +33,7 @@ parser = configargparse.ArgumentParser(description='compare multiple histories')
 parser.add('--config', '-c', is_config_file=True, help='config file path [default: %(default)s])')
 parser.add('files', nargs='+', type=str, help='comma-delimited list of checkpoint files')
 parser.add('--out', '-o', help='file name for output image', default='compare.png')
-parser.add('--crit-dict', '-d', help='dictionary of logged measures: abbrev:loggged_key,agg_func;...',default='tr:running_train_loss,min;ts:running_valid_loss,min;tr_f:running_loss_last_closure,min;tr_ef:epoch_train_loss,min;w:running_wt,mean;ts_iou:running_valid_iou,max;tr_iou:epoch_train_iou,max;tr_e:epoch_train_loss,min;lr:lr,mean')
+parser.add('--crit-dict', '-d', help='dictionary of logged measures: abbrev:loggged_key,agg_func;...',default='tr:running_train_loss,min;ts:running_valid_loss,min;tr_f:running_loss_last_closure,min;tr_ef:epoch_train_loss,min;w:running_wt,mean;ts_iou:running_valid_iou,max;tr_iou:epoch_train_iou,max;tr_e:epoch_train_loss,min;lr:lr,mean;grad:running_grad,mean')
 parser.add('--what', '-w', type=csv_list, default='tr,tr_f,ts', help='list of plot types (tr, ts, tr_f, w, iou)')
 parser.add('--grad', '-g', type=int, default=1, help='plot gradients?')
 parser.add('--max-iter', '-M', default=100000, type=int, help='maximum iteration')
@@ -43,7 +43,7 @@ parser.add('--min-y',  default=-1, type=float, help='minimum value to include')
 
 
 args = parser.parse_args()
-    
+
 model = architectures.CNN()
 tr = []
 tr_f = []
@@ -66,14 +66,36 @@ hist = {}
 
 for fname in args.files:
     if not os.path.isfile(fname):
-        #if os.path.isdir(fname):
-        #    # try to find latest checkpoint
-        #    for f in glob.glob(os.path.join(fname, ''):
-        #        print f     
-        raise ValueError('checkpoint not found: %s', fname)
-    checkpoint = torch.load(fname, map_location='cpu') # always load to cpu first!
-    hist[checkpoint['global_state']['args'].experiment] =  checkpoint['log']
+        if not os.path.isdir(fname):
+            raise ValueError('checkpoint not found: %s', fname)
 
+        exp_name = filter(lambda x: len(x) > 0, fname.split('/'))[-1]
+        guess = os.path.join(fname, 'model_save_%s.pth.tar' % exp_name)
+        if not os.path.isfile(guess):
+            raise ValueError('checkpoint not found: %s', fname)
+        fname = guess
+
+    checkpoint = torch.load(fname, map_location='cpu') # always load to cpu first!
+    exp_name = checkpoint['global_state']['args'].experiment
+    hist[exp_name] = checkpoint['log']
+    batch_size = checkpoint['global_state']['args'].batch_size
+    # rescale iterations by batch size
+    for entry in hist[exp_name]:
+        entry['it'] *= batch_size
+
+# sanity check for what_dict
+for k in what_dict:
+    found = False
+    for exp_name in hist:
+        try:
+            h = get_history_log(what_dict[k][0], hist[exp_name])
+            if len(h[0]) > 0:
+                found = True
+                break
+        except:
+            pass
+    if not found:
+        print 'WARNING: key %s=%s configured but not found in any history' % (k, what_dict[k][0])
 
 # prepare plot
 if args.grad > 0:
@@ -86,8 +108,6 @@ else:
 c = 0
 for exp_name in hist:
     for k in args.what:
-        if k == 'grad':
-            next
         try:
             h = get_history_log(what_dict[k][0], hist[exp_name])
             n = min(5, len(h[0]))
@@ -110,8 +130,8 @@ if args.grad > 0:
     for exp_name in hist:
 
         try:
-            v,i = filter_hist(get_history_log('grad', hist[exp_name]), args.min_iter, args.max_iter, args.min_y, args.max_y)
-            ax[1].plot(i, v, colors[c], label='grad ' + exp_name)
+            v,i = filter_hist(get_history_log('running_grad', hist[exp_name]), args.min_iter, args.max_iter, args.min_y, args.max_y)
+            ax[1].plot(i, v, colors[c], label='running_grad ' + exp_name)
             c = (c + 1) % len(colors)
         except:
             pass
