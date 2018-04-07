@@ -3,6 +3,7 @@
 import os
 import configargparse
 import glob
+from collections import OrderedDict
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
@@ -62,7 +63,7 @@ for k in args.what:
 
 # collect histories
 
-hist = {}
+hist = OrderedDict()
 
 for fname in args.files:
     if not os.path.isfile(fname):

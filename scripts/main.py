@@ -192,7 +192,7 @@ parser.add('--verbose', '-V', type=int, default=0, help='verbose logging')
 parser.add('--force-overwrite', type=int, default=0, help='overwrite existing checkpoint, if it exists')
 parser.add('--log-file', help='write logging output to file')
 parser.add('--cuda', type=int, default=0, help='use cuda')
-parser.add('--cuda_benchmark', type=int, default=0, help='use cuda benchmark mode')
+parser.add('--cuda-benchmark', type=int, default=0, help='use cuda benchmark mode')
 
 # loading and saving checkpoints
 # notes:
