@@ -121,7 +121,7 @@ class ReduceLROnPlateau2(object):
         self.last_epoch = epoch
 
         if self.verbose:
-            logging.debug('scheduler: epoch = %d, num_bad_epochs = %d, current = %.4f, best = %.4f, worst_after_best=%.4f, cooldown = %s, waiting_to_reduce = %s, waiting_for_deterioration = %s' % (epoch, self.num_bad_epochs, current, self.best, self.worst_after_best, self.in_cooldown, self.waiting_to_reduce, self.waiting_for_deterioration))
+            logging.info('[epoch %d] scheduler: num_bad_epochs = %d, current = %.4f, best = %.4f, worst_after_best=%.4f, cooldown = %s, waiting_to_reduce = %s, waiting_for_deterioration = %s' % (epoch, self.num_bad_epochs, current, self.best, self.worst_after_best, self.in_cooldown, self.waiting_to_reduce, self.waiting_for_deterioration))
 
         if not self.waiting_to_reduce and self.is_better(current, self.best):
             self.best = current
@@ -149,15 +149,16 @@ class ReduceLROnPlateau2(object):
         if not self.waiting_to_reduce and self.num_bad_epochs > self.patience:
             self.waiting_to_reduce = True
             if self.verbose:
-                logging.info('Epoch {:5d}: ran out of patience, waiting to reduce lr'.format(epoch))
+                #logging.info('Epoch {:5d}: ran out of patience, waiting to reduce lr'.format(epoch))
+                logging.info('[epoch %d] scheduler: ran out of patience, wating to reduce lr' % epoch)
 
         if self.waiting_to_reduce and self.is_acceptable_degradation(current, self.best, self.worst_after_best):
-                self._reduce_lr(epoch)
-                self.cooldown_counter = self.cooldown
-                self.num_bad_epochs = 0
-                self.worst_after_best = self.best
-                self.waiting_to_reduce = False
-                self.waiting_for_deterioration = True
+            self._reduce_lr(epoch)
+            self.cooldown_counter = self.cooldown
+            self.num_bad_epochs = 0
+            self.worst_after_best = self.best
+            self.waiting_to_reduce = False
+            self.waiting_for_deterioration = True
 
     def _reduce_lr(self, epoch):
         for i, param_group in enumerate(self.optimizer.param_groups):
@@ -166,7 +167,7 @@ class ReduceLROnPlateau2(object):
             if old_lr - new_lr > self.eps:
                 param_group['lr'] = new_lr
                 if self.verbose:
-                    logging.info('Epoch {:5d}: reducing learning rate'
+                    logging.info('[epoch %d] scheduler: reducing learning rate'
                           ' of group {} to {:.4e}.'.format(epoch, i, new_lr))
 
     @property

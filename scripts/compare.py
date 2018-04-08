@@ -113,7 +113,7 @@ for exp_name in hist:
                 best = np.mean(m)
             v,i = filter_hist(h, args.min_iter, args.max_iter, args.min_y, args.max_y)
 
-            ax0.plot(i, v, colors[c], label='%s %s [%.3f]' % (k, exp_name, best))
+            ax0.plot(i, v, colors[c], label='%s %s [%.3g]' % (k, exp_name, best))
             c = (c + 1) % len(colors)
         except:
             pass
