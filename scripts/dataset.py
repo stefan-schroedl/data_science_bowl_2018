@@ -125,6 +125,8 @@ class NucleusDataset(Dataset):
         if masks_prep_bin:
             self.data_df['masks_prep_bin'] = masks_prep_bin
         if num_nuc_inv:
+            # normalize!
+            num_nuc_inv = num_nuc_inv / np.mean(num_nuc_inv)
             self.data_df['num_nuc_inv'] = num_nuc_inv
 
         self.is_preprocessed = True
