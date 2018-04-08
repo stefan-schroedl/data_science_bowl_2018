@@ -38,7 +38,7 @@ import skimage
 from skimage.color import rgb2grey
 
 import utils
-from utils import mkdir_p, csv_list, int_list, strip_end, init_logging, get_log, set_log, clear_log, insert_log, get_latest_log, get_history_log, prob_to_rles, labels_to_rles, numpy_to_torch, torch_to_numpy
+from utils import mkdir_p, csv_list, int_list, strip_end, init_logging, get_log, set_log, clear_log, insert_log, get_latest_log, get_history_log, prob_to_rles, labels_to_rles, numpy_to_torch, torch_to_numpy, get_latest_checkpoint_file, get_checkpoint_file, checkpoint_file_from_dir, moving_average
 from adjust_learn_rate import get_learning_rate, adjust_learning_rate
 
 from KNN import *
@@ -207,34 +207,11 @@ parser.add('--cuda-benchmark', type=int, default=0, help='use cuda benchmark mod
 # 3) Similarly, scheduler state is not saved/restored.
 
 
-def get_checkpoint_file(args, it=0):
-    if it > 0:
-        return os.path.join(args.out_dir, 'model_save_%s.%d.pth.tar' % (args.experiment, it))
-    return os.path.join(args.out_dir, 'model_save_%s.pth.tar' % args.experiment)
-
-
-def get_latest_checkpoint_file(args):
-    last_it = -1
-    last_ckpt = ''
-    pattern = re.compile('model_save_%s.(?P<it>[0-9]+).pth.tar' % args.experiment)
-    for path, dirs, files in os.walk(args.out_dir):
-        for file in files:
-            m = pattern.match(file)
-            if m:
-                it = int(m.group(1))
-                if it > last_it:
-                    last_it = it
-                    last_ckpt = file
-    if last_it == -1:
-        raise ValueError('no previous checkpoint')
-    return os.path.join(args.out_dir, last_ckpt)
-
-
 def save_checkpoint(fname,
                     model,
                     optimizer=None,
                     global_state=None,
-                    is_best = False):
+                    is_best=False):
 
     #model.clearState()
     s = {'model_state_dict': model.state_dict(),
@@ -249,7 +226,6 @@ def save_checkpoint(fname,
     torch.save(s, fname)
 
     if is_best:
-        logging.info('new best: it = %d, train = %.5f, valid = %.5f' % (get_latest_log('it')[0], get_latest_log('train_loss', float('nan'))[0], get_latest_log('valid_loss', float('nan'))[0]))
         pref = strip_end(fname, '.pth.tar')
         shutil.copyfile(fname, '%s_best.pth.tar' % pref)
 
@@ -543,6 +519,7 @@ def train_cnn (train_loader,
                 running_loss.update(loss.data[0])
                 epoch_loss.update(loss.data[0])
                 for n in range(pred.size()[0]):
+                    # WARNING: iou for training is just an approximation, would need 'img' and 'masks' instead of 'img_prep and 'masks_prep' (original size)
                     pred_l, _ = torch_pred_to_np_label(pred[n], max_clusters_for_dilation=50) # dilation is slow, skip!
                     epoch_iou.update(iou_metric(mb_acc['masks_prep'][n].numpy().squeeze(), pred_l))
             logging.debug('loss: %s', loss.data.cpu().numpy()[0])
@@ -605,8 +582,8 @@ def train_cnn (train_loader,
                 insert_log(i, 'running_valid_iou', iou)
                 validated = True
 
-            iou = get_latest_log('running_valid_iou', 0.0)[0]
-            l = get_latest_log('running_valid_loss', 0.0)[0]
+            iou = get_latest_log('running_valid_iou', float('nan'))[0]
+            l = get_latest_log('running_valid_loss', float('nan'))[0]
 
             if i % print_every == 0:
                 logging.info('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f\tiou: %.3f\tlr: %g' %
@@ -618,10 +595,21 @@ def train_cnn (train_loader,
 
             if i % save_every == 0:
                 is_best = False
-                if global_state['best_loss'] > l:
-                    global_state['best_loss'] = l
-                    global_state['best_it'] = global_state['it']
-                    is_best = True
+                #if global_state['best_loss'] > l:
+                #    global_state['best_loss'] = l
+                #    global_state['best_it'] = global_state['it']
+                # smooth values over iterations
+                if iou > 0.0:
+                    h = get_history_log('running_valid_iou')
+                    n = min(5, len(h[0]))
+                    m = moving_average(h[0], n)
+                    cur = m[-1]
+                    if global_state['best_iou'] < cur:
+                        global_state['best_iou'] = cur
+                        global_state['best_iou_it'] = global_state['it']
+                        is_best = True
+                        logging.info('new best: it = %d, loss = %.5f, iou = %.5f' % (global_state['it'], l, cur))
+
                 save_checkpoint(
                     get_checkpoint_file(global_state['args']),
                     model,
@@ -644,7 +632,7 @@ def train_cnn (train_loader,
 
     time_end = time.time()
     time_total = time_end - time_start
-    return global_state['it'], global_state['best_loss'], global_state['best_it'], epoch_loss.avg, epoch_iou.avg, epoch_loss_last_closure.avg, time_total, time_val, n_val
+    return global_state['it'], epoch_loss.avg, epoch_iou.avg, epoch_loss_last_closure.avg, time_total, time_val, n_val
 
 
 # choose cpu or gpu
@@ -652,7 +640,6 @@ def dev(x):
     return x
 
 def main():
-    # global it, best_it, best_loss, LOG, args
     args = parser.parse_args()
 
     # in overrides, replace '-' by '_', and check that it is indeed an option
@@ -713,6 +700,8 @@ def main():
     global_state = {'it':0,
                     'best_loss':1e20,
                     'best_it':0,
+                    'best_iou':0.0,
+                    'best_iou_it':0,
                     'lr':args.lr,
                     'args':args,
                     'bp_wt_sum':0.1,
@@ -729,8 +718,8 @@ def main():
 
     elif args.model == 'cnn':
         trainer = train_cnn
-        model = CNN(32)
-        #model = UNetClassify(layers=4, init_filters=32)
+        #model = CNN(32)
+        model = UNetClassify(layers=4, init_filters=16)
         if args.weight_init != 'default':
            init_weights(model, args.weight_init)
         model = dev(model)
@@ -739,7 +728,7 @@ def main():
 
     # optionally resume from a checkpoint
     if args.resume:
-        model = load_checkpoint(args.resume, model, None, global_state)
+        model = load_checkpoint(checkpoint_file_from_dir(args.resume), model, None, global_state)
         # make sure args here is consistent with possibly updated global_state['args']!
         args = global_state['args']
         args.force_overwrite = 1
@@ -919,9 +908,9 @@ def main():
 
     for epoch in range(args.epochs):
         try:
-            it, best_loss, best_it, epoch_loss, epoch_iou, epoch_final_loss, time_total, time_val, n_val = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
+            it, epoch_loss, epoch_iou, epoch_final_loss, time_total, time_val, n_val = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
 
-            logging.info('[%d, %d]\tepoch: train loss %.3f, iou=%.3f, final loss=%.3f, total time=%d, val time=%d, s/it=%.2f, train s/it=%.2f, valid s/it=%.2f' %
+            logging.info('[%d, %d]\tepoch: train loss %.3f, iou=%.3f, final loss=%.3f, total time=%d, val time=%d, s/ex=%.2f, train s/ex=%.2f, valid s/ex=%.2f' %
                          (epoch,
                           global_state['it'],
                           epoch_loss,
@@ -929,8 +918,8 @@ def main():
                           epoch_final_loss,
                           time_total,
                           time_val,
-                          1.0 * time_total / len(train_loader) / batch_size_train,
-                          1.0 * (time_total - time_val) / len(train_loader) / batch_size_train,
+                          1.0 * time_total / len(train_dset),
+                          1.0 * (time_total - time_val) / len(train_dset),
                           1.0 * time_val / n_val if n_val > 0 else 0.0))
 
 
@@ -992,8 +981,6 @@ def main():
                                                        patience=1,
                                                        patience_threshold=0.1,
                                                        min_lr=0.1, verbose=1)
-
-            logging.info('epoch best: it = %d, valid = %.5f' % (best_it, best_loss))
 
         except TrainingBlowupError:
             # numerical instability, try to recover

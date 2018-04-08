@@ -182,7 +182,7 @@ class ReduceLROnPlateau2(object):
             rel_epsilon = 1. - threshold
             self.is_better = lambda a, best: a < best * rel_epsilon
             self.mode_worse = float('Inf')
-            self.is_acceptable_degradation = lambda a,best,worst: (a-best) <= patience_threshold*(worst-best)
+            self.is_acceptable_degradation = lambda a,best,worst: (a-best) <= patience_threshold*(max(worst-best, best))
         elif mode == 'min' and threshold_mode == 'abs':
             self.is_better = lambda a, best: a < best - threshold
             self.mode_worse = float('Inf')

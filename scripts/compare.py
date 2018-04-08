@@ -8,7 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 
-from utils import get_history_log, csv_list, moving_average
+from utils import get_history_log, csv_list, moving_average, checkpoint_file_from_dir
 import architectures
 from architectures import CNN
 
@@ -34,7 +34,7 @@ parser = configargparse.ArgumentParser(description='compare multiple histories')
 parser.add('--config', '-c', is_config_file=True, help='config file path [default: %(default)s])')
 parser.add('files', nargs='+', type=str, help='comma-delimited list of checkpoint files')
 parser.add('--out', '-o', help='file name for output image', default='compare.png')
-parser.add('--crit-dict', '-d', help='dictionary of logged measures: abbrev:loggged_key,agg_func;...',default='tr:running_train_loss,min;ts:running_valid_loss,min;tr_f:running_loss_last_closure,min;tr_ef:epoch_train_loss,min;w:running_wt,mean;ts_iou:running_valid_iou,max;tr_iou:epoch_train_iou,max;tr_e:epoch_train_loss,min;lr:lr,mean;grad:running_grad,mean')
+parser.add('--crit-dict', '-d', help='dictionary of logged measures: abbrev:loggged_key,agg_func;...',default='tr:running_train_loss,min;ts:running_valid_loss,min;tr_f:running_loss_last_closure,min;tr_ef:epoch_train_loss,min;w:running_wt,mean;ts_iou:running_valid_iou,max;tr_iou:epoch_train_iou,max;tr_e:epoch_train_loss,min;lr:lr,min;grad:running_grad,mean')
 parser.add('--what', '-w', type=csv_list, default='tr,tr_f,ts', help='list of plot types (tr, ts, tr_f, w, iou)')
 parser.add('--grad', '-g', type=int, default=1, help='plot gradients?')
 parser.add('--max-iter', '-M', default=100000, type=int, help='maximum iteration')
@@ -66,16 +66,7 @@ for k in args.what:
 hist = OrderedDict()
 
 for fname in args.files:
-    if not os.path.isfile(fname):
-        if not os.path.isdir(fname):
-            raise ValueError('checkpoint not found: %s', fname)
-
-        exp_name = filter(lambda x: len(x) > 0, fname.split('/'))[-1]
-        guess = os.path.join(fname, 'model_save_%s.pth.tar' % exp_name)
-        if not os.path.isfile(guess):
-            raise ValueError('checkpoint not found: %s', fname)
-        fname = guess
-
+    fname = checkpoint_file_from_dir(fname)
     checkpoint = torch.load(fname, map_location='cpu') # always load to cpu first!
     exp_name = checkpoint['global_state']['args'].experiment
     hist[exp_name] = checkpoint['log']
@@ -119,8 +110,9 @@ for exp_name in hist:
             elif what_dict[k][1] == 'max':
                 best = max(m)
             else:
-                best = mean(m)
+                best = np.mean(m)
             v,i = filter_hist(h, args.min_iter, args.max_iter, args.min_y, args.max_y)
+
             ax0.plot(i, v, colors[c], label='%s %s [%.3f]' % (k, exp_name, best))
             c = (c + 1) % len(colors)
         except:

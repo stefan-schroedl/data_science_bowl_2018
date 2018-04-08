@@ -51,7 +51,7 @@ def set_log(l):
 
 def insert_log(it, k, v):
     global LOG
-    #logging.info('INSERT %s %s %s' % ( it, k, v))
+    #logging.info('INSERT %s %s %s %s' % (it, k, v, type(v)))
     if len(LOG) > 0:
         last = LOG[-1]
         if last['it'] > it:
@@ -93,6 +93,41 @@ def get_history_log(what, log=None):
     vals = [x[what] for x in log if what in x]
     its = [x['it'] for x in log if what in x]
     return vals, its
+
+
+def get_checkpoint_file(args, it=0):
+    if it > 0:
+        return os.path.join(args.out_dir, 'model_save_%s.%d.pth.tar' % (args.experiment, it))
+    return os.path.join(args.out_dir, 'model_save_%s.pth.tar' % args.experiment)
+
+
+def get_latest_checkpoint_file(args):
+    last_it = -1
+    last_ckpt = ''
+    pattern = re.compile('model_save_%s.(?P<it>[0-9]+).pth.tar' % args.experiment)
+    for path, dirs, files in os.walk(args.out_dir):
+        for file in files:
+            m = pattern.match(file)
+            if m:
+                it = int(m.group(1))
+                if it > last_it:
+                    last_it = it
+                    last_ckpt = file
+    if last_it == -1:
+        raise ValueError('no previous checkpoint')
+    return os.path.join(args.out_dir, last_ckpt)
+
+
+def checkpoint_file_from_dir(fname):
+    if os.path.isfile(fname):
+        return fname
+    if not os.path.isdir(fname):
+        raise ValueError('checkpoint not found: %s', fname)
+    exp_name = filter(lambda x: len(x) > 0, fname.split('/'))[-1]
+    guess = os.path.join(fname, 'model_save_%s.pth.tar' % exp_name)
+    if not os.path.isfile(guess):
+        raise ValueError('checkpoint not found: %s', fname)
+    return guess
 
 
 def init_logging(opts={}):

@@ -83,7 +83,7 @@ def iou_metric(labels, y_pred, print_table=False):
 
     if print_table:
         print("AP\t-\t-\t-\t{:1.3f}".format(np.mean(prec)))
-    return np.mean(prec)
+    return np.asscalar(np.mean(prec))
 
 
 def print_diag(p, p_loc, mean_prec, mean_rec, missed_rate, extra_rate, oseg, useg):
