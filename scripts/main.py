@@ -488,7 +488,7 @@ def train_cnn (train_loader,
     acc = [] # train data buffer, needed for gradient accumulation with lbfgs
     running_loss = AverageMeter() # training loss before gradient step
     epoch_loss = AverageMeter()
-    weight_stats = AverageMeter()
+    epoch_weight = AverageMeter()
     epoch_iou = AverageMeter()
 
     # only meaningful for lbfgs, loss before last descent in closure
@@ -509,7 +509,7 @@ def train_cnn (train_loader,
             if global_state['args'].use_instance_weights > 0:
                 w = mb_acc['num_nuc_inv']
                 for i in range(w.size()[0]):
-                    weight_stats.update(w[i])
+                    epoch_weight.update(w[i])
                 w = w.float().unsqueeze(1).unsqueeze(1).unsqueeze(1) # make size broadcastable with batch dimension
                 criterion.weight = dev(w)
 
@@ -551,7 +551,6 @@ def train_cnn (train_loader,
         closure_cnt = [0]
         running_loss.reset()
         running_loss_last_closure.reset()
-        weight_stats.reset()
         grad = [float('nan')]
 
         # learn!
@@ -588,9 +587,6 @@ def train_cnn (train_loader,
             if i % print_every == 0:
                 logging.info('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f\tiou: %.3f\tlr: %g' %
                              (epoch, i, train_loss, l, iou, global_state['lr']))
-                if global_state['args'].use_instance_weights > 0:
-                    logging.debug('[%d, %d]\tavg instance weight: %.3f' %
-                                  (epoch, i, global_state['bp_wt_sum'] /  global_state['bp_wt_cnt']))
                 save_plot(os.path.join(global_state['args'].out_dir, 'progress.png'), global_state['args'].experiment)
 
             if i % save_every == 0:
@@ -622,9 +618,6 @@ def train_cnn (train_loader,
         if not math.isnan(grad[0]):
             insert_log(it, 'running_grad', grad[0])
 
-        if global_state['args'].use_instance_weights > 0:
-            insert_log(it, 'running_wt', weight_stats.avg)
-
         if is_lbfgs:
             final_train_loss = running_loss_last_closure.avg
             logging.debug('initial loss: %.3f, final loss: %.3f' %(train_loss, final_train_loss))
@@ -632,7 +625,7 @@ def train_cnn (train_loader,
 
     time_end = time.time()
     time_total = time_end - time_start
-    return global_state['it'], epoch_loss.avg, epoch_iou.avg, epoch_loss_last_closure.avg, time_total, time_val, n_val
+    return global_state['it'], epoch_loss.avg, epoch_iou.avg, epoch_loss_last_closure.avg, epoch_weight.avg, time_total, time_val, n_val,
 
 
 # choose cpu or gpu
@@ -908,14 +901,15 @@ def main():
 
     for epoch in range(args.epochs):
         try:
-            it, epoch_loss, epoch_iou, epoch_final_loss, time_total, time_val, n_val = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
+            it, epoch_loss, epoch_iou, epoch_final_loss, epoch_wt, time_total, time_val, n_val = trainer(train_loader, valid_loader, model, criterion, optimizer, scheduler, epoch, args.eval_every, args.print_every, args.save_every, global_state)
 
-            logging.info('[%d, %d]\tepoch: train loss %.3f, iou=%.3f, final loss=%.3f, total time=%d, val time=%d, s/ex=%.2f, train s/ex=%.2f, valid s/ex=%.2f' %
+            logging.info('[%d, %d]\tepoch: train loss %.3f, iou=%.3f, final loss=%.3f, inst wt=%.3g, total time=%d, val time=%d, s/ex=%.2f, train s/ex=%.2f, valid s/ex=%.2f' %
                          (epoch,
                           global_state['it'],
                           epoch_loss,
                           epoch_iou,
                           epoch_final_loss,
+                          epoch_wt,
                           time_total,
                           time_val,
                           1.0 * time_total / len(train_dset),
@@ -930,16 +924,17 @@ def main():
                 logging.error(msg)
                 raise TrainingBlowupError(msg)
 
+            insert_log(global_state['it'], 'epoch_train_loss', epoch_loss)
+            insert_log(global_state['it'], 'epoch_final_loss', epoch_final_loss)
+            insert_log(global_state['it'], 'epoch_train_iou', epoch_iou)
+            insert_log(global_state['it'], 'lr', global_state['lr'])
+            insert_log(global_state['it'], 'epoch_wt', epoch_wt)
+
             save_checkpoint(
                 get_checkpoint_file(global_state['args'], global_state['it']),
                 model,
                 optimizer,
                 global_state)
-
-            insert_log(global_state['it'], 'epoch_train_loss', epoch_loss)
-            insert_log(global_state['it'], 'epoch_final_loss', epoch_final_loss)
-            insert_log(global_state['it'], 'epoch_train_iou', epoch_iou)
-            insert_log(global_state['it'], 'lr', global_state['lr'])
 
             if global_state['args'].scheduler != 'none':
                 # note: different interface!
