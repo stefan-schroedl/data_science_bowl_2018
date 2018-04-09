@@ -2,7 +2,6 @@
 
 import os
 import configargparse
-import glob
 from collections import OrderedDict
 import numpy as np
 import matplotlib.pyplot as plt
@@ -10,37 +9,64 @@ import torch
 
 from utils import get_history_log, csv_list, moving_average, checkpoint_file_from_dir
 import architectures
-from architectures import CNN
+
 
 def filter_hist(h, min_it, max_it, min_y, max_y):
-    its = [i for v,i in zip(h[0], h[1]) if i >= min_it and i <= max_it]
-    vs  = [min(max(v, min_y), max_y) for v,i in zip(h[0], h[1]) if i >= min_it and i <= max_it]
+    its = [i for v, i in zip(h[0], h[1]) if i >= min_it and i <= max_it]
+    vs = [min(max(v, min_y), max_y)
+          for v, i in zip(h[0], h[1]) if i >= min_it and i <= max_it]
 
     return vs, its
+
 
 def parse_what_dict(specs):
     what_dict = {}
     for spec in specs.split(';'):
-        l,r = spec.split(':')
+        l, r = spec.split(':')
         if r is None:
             raise ValueError('wrong spec: %s' % spec)
-        k,fn = r.split(',')
+        k, fn = r.split(',')
         if fn is None or fn not in ['min', 'max', 'mean']:
             raise ValueError('wrong spec: %s' % spec)
         what_dict[l] = (k, fn)
     return what_dict
 
-parser = configargparse.ArgumentParser(description='compare multiple histories')
-parser.add('--config', '-c', is_config_file=True, help='config file path [default: %(default)s])')
-parser.add('files', nargs='+', type=str, help='comma-delimited list of checkpoint files')
-parser.add('--out', '-o', help='file name for output image', default='compare.png')
-parser.add('--crit-dict', '-d', help='dictionary of logged measures: abbrev:loggged_key,agg_func;...',default='tr:running_train_loss,min;ts:running_valid_loss,min;tr_f:running_loss_last_closure,min;tr_ef:epoch_train_loss,min;w:epoch_wt,mean;ts_iou:running_valid_iou,max;tr_iou:epoch_train_iou,max;tr_e:epoch_train_loss,min;lr:lr,min;grad:running_grad,mean')
-parser.add('--what', '-w', type=csv_list, default='tr,tr_f,ts', help='list of plot types (tr, ts, tr_f, w, iou)')
+
+parser = configargparse.ArgumentParser(
+    description='compare multiple histories')
+parser.add('--config', '-c', is_config_file=True,
+           help='config file path [default: %(default)s])')
+parser.add(
+    'files',
+    nargs='+',
+    type=str,
+    help='comma-delimited list of checkpoint files')
+parser.add(
+    '--out',
+    '-o',
+    help='file name for output image',
+    default='compare.png')
+parser.add(
+    '--crit-dict',
+    '-d',
+    help='dictionary of logged measures: abbrev:loggged_key,agg_func;...',
+    default='tr:running_train_loss,min;ts:running_valid_loss,min;tr_f:running_loss_last_closure,min;tr_ef:epoch_train_loss,min;w:epoch_wt,mean;ts_iou:running_valid_iou,max;tr_iou:epoch_train_iou,max;tr_e:epoch_train_loss,min;lr:lr,min;grad:running_grad,mean')
+parser.add('--what', '-w', type=csv_list, default='tr,tr_f,ts',
+           help='list of plot types (tr, ts, tr_f, w, iou)')
 parser.add('--grad', '-g', type=int, default=1, help='plot gradients?')
-parser.add('--max-iter', '-M', default=100000, type=int, help='maximum iteration')
+parser.add(
+    '--max-iter',
+    '-M',
+    default=100000,
+    type=int,
+    help='maximum iteration')
 parser.add('--min-iter', '-m', default=-1, type=int, help='minimum iteration')
-parser.add('--max-y',  default=100000, type=float, help='maximum value to include')
-parser.add('--min-y',  default=-1, type=float, help='minimum value to include')
+parser.add(
+    '--max-y',
+    default=100000,
+    type=float,
+    help='maximum value to include')
+parser.add('--min-y', default=-1, type=float, help='minimum value to include')
 
 
 args = parser.parse_args()
@@ -58,7 +84,7 @@ colors = ['b', 'g', 'r', 'c', 'm', 'y', 'k']
 what_dict = parse_what_dict(args.crit_dict)
 
 for k in args.what:
-    if not k in what_dict:
+    if k not in what_dict:
         raise ValueError('unknown history type: %s' % k)
 
 # collect histories
@@ -67,7 +93,8 @@ hist = OrderedDict()
 
 for fname in args.files:
     fname = checkpoint_file_from_dir(fname)
-    checkpoint = torch.load(fname, map_location='cpu') # always load to cpu first!
+    # always load to cpu first!
+    checkpoint = torch.load(fname, map_location='cpu')
     exp_name = checkpoint['global_state']['args'].experiment
     hist[exp_name] = checkpoint['log']
     batch_size = checkpoint['global_state']['args'].batch_size
@@ -84,7 +111,7 @@ for k in what_dict:
             if len(h[0]) > 0:
                 found = True
                 break
-        except:
+        except BaseException:
             pass
     if not found:
         print 'WARNING: key %s=%s configured but not found in any history' % (k, what_dict[k][0])
@@ -111,11 +138,14 @@ for exp_name in hist:
                 best = max(m)
             else:
                 best = np.mean(m)
-            v,i = filter_hist(h, args.min_iter, args.max_iter, args.min_y, args.max_y)
+            v, i = filter_hist(
+                h, args.min_iter, args.max_iter, args.min_y, args.max_y)
 
-            ax0.plot(i, v, colors[c], label='%s %s [%.3g]' % (k, exp_name, best))
+            ax0.plot(
+                i, v, colors[c], label='%s %s [%.3g]' %
+                (k, exp_name, best))
             c = (c + 1) % len(colors)
-        except:
+        except BaseException:
             pass
 
 if args.grad > 0:
@@ -123,12 +153,13 @@ if args.grad > 0:
     for exp_name in hist:
 
         try:
-            v,i = filter_hist(get_history_log('running_grad', hist[exp_name]), args.min_iter, args.max_iter, args.min_y, args.max_y)
+            v, i = filter_hist(
+                get_history_log(
+                    'running_grad', hist[exp_name]), args.min_iter, args.max_iter, args.min_y, args.max_y)
             ax[1].plot(i, v, colors[c], label='running_grad ' + exp_name)
             c = (c + 1) % len(colors)
-        except:
+        except BaseException:
             pass
-
 
     ax[1].grid(True, 'both')
     ax[1].legend()

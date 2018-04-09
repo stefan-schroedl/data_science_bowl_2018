@@ -22,35 +22,29 @@ import cv2
 
 from tqdm import tqdm
 
-from utils import numpy_to_torch
+from img_proc import numpy_to_torch, binarize, noop_augmentation, nuc_augmentation, affine_augmentation, color_augmentation, preprocess_img, preprocess_mask
 
-from nuc_trans import binarize, separate_touching_nuclei, erode_mask, redilate_mask, noop_augmentation, nuc_augmentation, affine_augmentation, color_augmentation, preprocess_img, preprocess_mask
 
 class NucleusDataset(Dataset):
     """Dataset for the 2018 Data Science Bowl."""
 
     @staticmethod
     def read_and_stack(in_img_list):
-        return np.sum(np.stack([i*(imread(c_img)>0) for i, c_img in enumerate(in_img_list, 1)], 0), 0)
-        #r = (reduce(
+        return np.sum(np.stack([i * (imread(c_img) > 0)
+                                for i, c_img in enumerate(in_img_list, 1)], 0), 0)
+        # r = (reduce(
         #        np.bitwise_or, [
         #            np.asarray(Image.open(c_img)) for c_img in iter(in_img_list)])).astype(np.uint8)
         #r = r / r.max()
-        #return r
+        # return r
 
     @staticmethod
     def read_image(in_img_list):
         #img = img_as_float(rgb2hsv(rgba2rgb(io.imread(in_img_list[0]))))
-        #img = cv2.imread(in_img_list[0])[:,:,1] # as done in ali's pipeline
-        #return img, img.shape
+        # img = cv2.imread(in_img_list[0])[:,:,1] # as done in ali's pipeline
+        # return img, img.shape
         img = Image.open(in_img_list[0])
         return np.array(img.convert('RGB')), img.size
-
-    @staticmethod
-    def is_inverted(img, invert_thresh_pd=10.0):
-        img_grey = img_as_ubyte(rgb2grey(img))
-        img_th = cv2.threshold(img_grey,0,255,cv2.THRESH_OTSU)[1]
-        return np.sum(img_th==255)>((invert_thresh_pd/10.0)*np.sum(img_th==0))
 
     @property
     def dset_type(self):
@@ -77,29 +71,36 @@ class NucleusDataset(Dataset):
         # conveniently, the dataloader actually collates dictionaries with arbitrarily many keys,
         # as long as all items with the same key have the same dimensions. Therefore, if we want to
         # test the original images in validation, without resizing, validation batch size has to be 1.
-        # as a workaround to get unevenly sized data, we can return the row index to retrieve it in the caller.
+        # as a workaround to get unevenly sized data, we can return the row
+        # index to retrieve it in the caller.
 
-        # for debugging, add row index to return_fields. then you can retrieve anything from the row in the caller.
+        # for debugging, add row index to return_fields. then you can retrieve
+        # anything from the row in the caller.
 
         if self.dset_type == 'train':
-            self.return_fields = ['images_prep', 'masks_prep', 'masks_prep_bin', 'num_nuc_inv']
+            self.return_fields = [
+                'images_prep',
+                'masks_prep',
+                'masks_prep_bin',
+                'inst_wt']
         elif self.dset_type == 'valid':
             self.return_fields = ['images_prep', 'masks', 'masks_bin']
         else:
             self.return_fields = ['images_prep']
-
 
     def preprocess(self):
 
         imgs_prep = []      # preprocessed input images
         masks_bin = []      # binarized masks
         masks_prep = []     # preprocesed masks
-        masks_prep_bin = [] # binarized preprocessed masks
-        num_nuc_inv = []    # 1 / (#nuclei + 1), used as instance weight
+        masks_prep_bin = []  # binarized preprocessed masks
+        # instance weights, 1 / (#nuclei + 1), used as instance weight
+        inst_wt = []
 
         for i in tqdm(range(len(self.data_df)), desc='prep ' + self.dset_type):
 
-            # training images and masks can be resized, but validation and test cannot
+            # training images and masks can be resized, but validation and test
+            # cannot
             w = 512 if self.dset_type == 'train' else None
 
             img = self.data_df['images'].iloc[i]
@@ -112,7 +113,7 @@ class NucleusDataset(Dataset):
                 masks_prep.append(prep)
                 masks_bin.append(binarize(m))
                 masks_prep_bin.append(binarize(prep))
-                num_nuc_inv.append(1.0 / (m.flatten().max() + 1.0))
+                inst_wt.append(1.0 / (m.flatten().max() + 1.0))
 
         # for some reason, the following (which is recommended) gives an error:
         # self.data_df.loc[:, 'imgs_prep'] = imgs_prep
@@ -124,13 +125,12 @@ class NucleusDataset(Dataset):
             self.data_df['masks_prep'] = masks_prep
         if masks_prep_bin:
             self.data_df['masks_prep_bin'] = masks_prep_bin
-        if num_nuc_inv:
+        if inst_wt:
             # normalize!
-            num_nuc_inv = num_nuc_inv / np.mean(num_nuc_inv)
-            self.data_df['num_nuc_inv'] = num_nuc_inv
+            inst_wt = inst_wt / np.mean(inst_wt)
+            self.data_df['inst_wt'] = inst_wt
 
         self.is_preprocessed = True
-
 
     def __init__(
             self,
@@ -150,7 +150,7 @@ class NucleusDataset(Dataset):
         if root_dir is None:
             return
 
-        p =  os.path.join(
+        p = os.path.join(
             root_dir,
             stage_name +
             '_*',
@@ -158,7 +158,7 @@ class NucleusDataset(Dataset):
             '*',
             '*')
         all_images = glob(p)
-        if len(all_images)==0:
+        if len(all_images) == 0:
             print "Failed to find any images :( [%s]" % p
             sys.exit(1)
         img_df = pd.DataFrame({'path': all_images})
@@ -196,7 +196,8 @@ class NucleusDataset(Dataset):
         logging.debug('reading images')
         ret = data_df['images'].map(self.read_image)
         #(data_df['images'], data_df['format'], data_df['mode'], data_df['size']) = ([x[i] for x in ret] for i in range(4))
-        (data_df['images'], data_df['size']) = ([x[i] for x in ret] for i in range(2))
+        (data_df['images'], data_df['size']) = (
+            [x[i] for x in ret] for i in range(2))
 
         if self.dset_type != 'test':
             logging.debug('reading masks')
@@ -207,10 +208,8 @@ class NucleusDataset(Dataset):
         self.data_df = data_df
         logging.debug('done reading data')
 
-
     def __len__(self):
         return self.data_df.shape[0]
-
 
     def apply_augment(self, cols):
         trans_det = self.augment.to_deterministic()
@@ -219,7 +218,8 @@ class NucleusDataset(Dataset):
         def trans_if_img(img):
             if isinstance(img, np.ndarray):
                 img = trans_det.augment_image(img)
-                if len(img.shape) == 3 and img.shape[2] == 3: # exclude the mask from color transformations
+                if len(
+                        img.shape) == 3 and img.shape[2] == 3:  # exclude the mask from color transformations
                     img = trans_det_color.augment_image(img)
                 return numpy_to_torch(trans_det.augment_image(img))
             else:
@@ -227,7 +227,6 @@ class NucleusDataset(Dataset):
                 return img
 
         return dict([(k, trans_if_img(img)) for k, img in cols.items()])
-
 
     def __getitem__(self, idx):
 
@@ -237,10 +236,10 @@ class NucleusDataset(Dataset):
         row = self.data_df.iloc[idx].to_dict()
         # for debugging:
         # row['idx'] = idx
-        return self.apply_augment(dict([(k,row[k]) for k in self.return_fields]))
+        return self.apply_augment(
+            dict([(k, row[k]) for k in self.return_fields]))
 
-
-    def train_test_split(self,  **options):
+    def train_test_split(self, **options):
         """ Return a list of splitted indices from a DataSet.
         Indices can be used with DataLoader to build a train and validation set.
 
