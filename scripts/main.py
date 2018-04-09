@@ -186,7 +186,7 @@ parser.add('--override-model-opts', type=csv_list, default='override-model-opts,
            help='when resuming, change these options [default: %(default)s]')
 parser.add('--calc-iou', type=int, default=0, help='calculate iou and exit')
 parser.add('--calc-pred', type=int, default=0, help='calculate predictions and exit')
-parser.add('--predictions-file', type=str, default='predictions.csv', help='file name for predictions output')
+parser.add('--predictions-file', type=str, help='file name for predictions output')
 parser.add('--random-seed', type=int, default=2018, help='set random number generator seed [default: %(default)s]')
 parser.add('--verbose', '-V', type=int, default=0, help='verbose logging')
 parser.add('--force-overwrite', type=int, default=0, help='overwrite existing checkpoint, if it exists')
@@ -660,6 +660,8 @@ def main():
 
     init_logging(args)
 
+    if args.predictions_file is None:
+        args.predictions_file = os.path.join(args.out_dir, 'predictions_%s.csv' % args.experiment)
     if args.cuda > 0:
         if not torch.cuda.is_available():
             raise ValueError('cuda requested, but not available')
@@ -823,7 +825,7 @@ def main():
                 ax[0].imshow(img)
                 ax[1].imshow(pred)
                 ax[2].imshow(pred_l)
-                fig.savefig('img_test.%d.png' % i)
+                fig.savefig(os.path.join(args.out_dir, 'img_%s.%d.png' % (args.experiment, i)))
                 plt.close()
 
         dset.data_df['pred'] = preds
@@ -837,7 +839,9 @@ def main():
                                      'EncodedPixels': ' '.join(np.array(c_rle).astype(str))})
 
         out_pred_df = pd.DataFrame(out_pred_list)
-        logging.info('%d regions found for %d images' %(out_pred_df.shape[0], dset.data_df.shape[0]))
+        msg = '%d regions found for %d images' % (out_pred_df.shape[0], dset.data_df.shape[0])
+        logging.info(msg)
+        print msg
         out_pred_df[['ImageId', 'EncodedPixels']].to_csv(args.predictions_file, index = False)
 
         return
