@@ -1,3 +1,4 @@
+from nuc_trans  import random_rotate90_transform2
 from architectures import UNetClassify
 import numpy as np
 import torch
@@ -71,10 +72,10 @@ def dilate(im):
 
 d=load_dataset(data_dir)
 
-model = UNetClassify(layers=4, init_filters=32)
+model = UNetClassify(layers=4, init_filters=16)
 
 
-cuda=False
+cuda=True
 if cuda:
     model=model.cuda()
 
@@ -82,33 +83,41 @@ if cuda:
 #print im_torch.size()
 #out=model.forward(im_torch)
 #print out.size()
-#criterion=nn.BCELoss()
-criterion=nn.MSELoss()
+criterion=nn.BCELoss()
+#criterion=nn.MSELoss()
 #criterion=nn.BCEWithLogitsLoss()
-optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
-batch_size=1
+#optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+batch_size=8
 model.train()
+it=0
 for batch_id in xrange(10000):
     optimizer.zero_grad()
     mini_loss=0
     for img_id in xrange(batch_size):
         im_id=random.choice(train_d.keys())
-        while pred_ty not in train_d[im_id] or load_image(data_dir,train_d[im_id]['seg']).shape[0]>350:
+        while pred_ty not in train_d[im_id]:# or load_image(data_dir,train_d[im_id]['seg']).shape[0]>350:
             im_id=random.choice(train_d.keys())
-        im_in=Variable(n2t(load_image(data_dir,train_d[im_id]['seg'])).unsqueeze(0))
-        im_out=Variable(n2t(dilate(load_image(data_dir,train_d[im_id][pred_ty],c=0))).unsqueeze(0))
+	it+=1
+	#print load_image(data_dir,train_d[im_id]['seg']).shape
+
+	im_in=load_image(data_dir,train_d[im_id]['seg'],c=0)
+	im_out=dilate(load_image(data_dir,train_d[im_id][pred_ty],c=0))
+	im_in, im_out = random_rotate90_transform2(im_in, im_out)
+        im_in=Variable(n2t(im_in).unsqueeze(0))
+        im_out=Variable(n2t(im_out).unsqueeze(0))
         if cuda:
             im_in=im_in.cuda()
             im_out=im_out.cuda()
         output = model(im_in)
         loss = criterion(output, im_out)
-        mini_loss+=loss.data[0]
+        mini_loss+=loss.data[0]/batch_size
 	#visualize
 	im_in_np=t2n(im_in[0])
 	im_out_np=t2n(im_out[0])
 	im_pred_np=t2n(output[0])
-	cv2.imshow('out vs pred',np.concatenate((im_pred_np,im_out_np),axis=1))
-	cv2.waitKey(20)
+	cv2.imwrite('out%d.png' % (it%10),np.concatenate((im_pred_np,im_out_np),axis=1))
+	#cv2.waitKey(20)
     loss.backward()
     print mini_loss
     optimizer.step()

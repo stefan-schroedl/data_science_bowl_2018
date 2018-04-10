@@ -12,7 +12,7 @@ from torch.nn.utils import weight_norm
 
 from groupnorm import GroupNorm
 
-INPLACE = False
+INPLACE = True
 
 def init_weights(net, method='kaiming'):
     if method not in ['kaiming', 'xavier']:
@@ -272,8 +272,9 @@ class UNet(nn.Module):
         # new
         #self.squash_layer = nn.Conv2d(3, 1, stride=1, kernel_size=1, padding=0)
         #self.data_norm = nn.BatchNorm2d(1)
-        self.data_norm = GroupNorm(3,3)
-        self.init_layer = nn.Conv2d(3, init_filters, (7, 7), padding=3)
+        #self.data_norm = GroupNorm(3,3)
+        #self.init_layer = nn.Conv2d(3, init_filters, (7, 7), padding=3)
+        self.init_layer = nn.Conv2d(1, init_filters, (7, 7), padding=3)
         self.activation = nn.ReLU(inplace=INPLACE)
         #self.init_norm = nn.BatchNorm2d(init_filters)
         self.init_norm = GroupNorm(init_filters, init_filters)
@@ -281,18 +282,18 @@ class UNet(nn.Module):
 
     def forward(self, x):
         #x = self.squash_layer(x)
-        x = self.data_norm(x)
+        #x = self.data_norm(x)
         x = self.init_norm(self.activation(self.init_layer(x)))
 
         saved_x = [x]
         for layer in self.down_layers:
             saved_x.append(x)
-            x = self.dropout(layer(x))
+            x = layer(x) #self.dropout(layer(x))
         is_first = True
         for layer, saved_x in zip(self.up_layers, reversed(saved_x)):
             if not is_first:
                 is_first = False
-                x = self.dropout(x)
+                #x = self.dropout(x)
             x = layer(x, saved_x)
         return x
 
