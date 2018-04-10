@@ -43,7 +43,7 @@ def n2t(im):
 	return torch.from_numpy(np.transpose(im, (2, 0, 1)).astype(np.float)/255).float()
 
 def t2n(im):
-	n=im.data.numpy()
+	n=im.cpu().data.numpy()
 	n[n<0]=0
 	div=255.0/max(1.0,n.max())
 	return (np.transpose(n,(1,2,0))*div).astype(np.uint8)
