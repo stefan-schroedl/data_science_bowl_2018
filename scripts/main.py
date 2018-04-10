@@ -572,8 +572,13 @@ def dev(x):
 
 def main():
     parser = configargparse.ArgumentParser(
-        description='Data Science Bowl 2018')
-
+        description='training and testing of NN model.')
+    parser.add(
+        '--config',
+        '-c',
+        default='default.cfg',
+        is_config_file=True,
+        help='config file path [default: %(default)s])')
     parser.add(
         '--model',
         help='cnn/knn',
@@ -582,157 +587,23 @@ def main():
             'cnn'],
         required=True,
         default="")
-    parser.add(
-        '--config',
-        '-c',
-        default='default.cfg',
-        is_config_file=True,
-        help='config file path [default: %(default)s])')
-    parser.add('--data', '-d', metavar='DIR', required=True,
-               help='path to dataset')
+
+        # parser.add('--arch', '-a', metavar='ARCH', default='resnet18',
+        #                                        choices=model_names,
+        #                                        help='model architecture: ' +
+        #                                            ' | '.join(model_names) +
+        #                                            ' (default: resnet18)')
     parser.add('--experiment', '-e', required=True, help='experiment name')
     parser.add('--out-dir', '-o', help='output directory')
-    parser.add('--stage', '-s', default='stage1',
-               help='stage [default: %(default)s]')
-    parser.add('--group', '-g', default='train',
-               help='group name [default: %(default)s]')
-    # parser.add('--arch', '-a', metavar='ARCH', default='resnet18',
-    #                                        choices=model_names,
-    #                                        help='model architecture: ' +
-    #                                            ' | '.join(model_names) +
-    #                                            ' (default: resnet18)')
-    parser.add('-j', '--workers', default=1, type=int, metavar='N',
-               help='number of data loading workers [default: %(default)s]')
-    parser.add('--epochs', default=1, type=int, metavar='N',
-               help='number of total epochs to run [default: %(default)s]')
-    parser.add('--start-epoch', default=0, type=int, metavar='N',
-               help='manual epoch number (useful on restarts)')
-    parser.add('-b', '--batch-size', default=1, type=int,
-               metavar='N', help='mini-batch size [default: %(default)s]')
-    parser.add(
-        '--grad-accum',
-        default=1,
-        type=int,
-        metavar='N',
-        help='number of batches between gradient descent [default: %(default)s]')
-    parser.add(
-        '--lr',
-        '--learning-rate',
-        default=0.001,
-        type=float,
-        metavar='LR',
-        help='initial learning rate [default: %(default)s]')
-    parser.add(
-        '--scheduler',
-        default='none',
-        choices=[
-            'none',
-            'plateau',
-            'exp',
-            'multistep'],
-        help='learn rate scheduler [default: %(default)s]')
-    parser.add(
-        '--scheduler_milestones',
-        type=int_list,
-        default='200',
-        help='milestones for multistep scheduler')
-    parser.add('--min-lr', default=0.0001, type=float, metavar='N',
-               help='minimum learn rate for scheduler [default: %(default)s]')
-    parser.add('--momentum', '-m', default=0.9, type=float, metavar='M',
-               help='momentum [default: %(default)s]')
-    parser.add('--weight-decay', default=1e-4, type=float,
-               metavar='W', help='weight decay [default: %(default)s]')
-    parser.add('--history-size', type=int, default=100,
-               help='history size for lbfgs [default: %(default)s]')
-    parser.add('--max-iter-lbfgs', type=int, default=20,
-               help='maximum iterations for lbfgs [default: %(default)s]')
-    parser.add(
-        '--tolerance-change',
-        type=float,
-        default=0.01,
-        help='tolerance for termination for lbfgs [default: %(default)s]')
-    parser.add(
-        '--weight-init',
-        default='kaiming',
-        choices=[
-            'kaiming',
-            'xavier',
-            'default'],
-        help='weight initialization method default: %(default)s]')
-    parser.add(
-        '--use-instance-weights',
-        default=0,
-        type=int,
-        metavar='N',
-        help='apply instance weights during training [default: %(default)s]')
-    parser.add(
-        '--clip-gradient',
-        default=0.25,
-        type=float,
-        metavar='C',
-        help='clip excessive gradients during training [default: %(default)s]')
-    parser.add(
-        '--criterion',
-        '-C',
-        default='bce',
-        choices=[
-            'mse',
-            'bce',
-            'jaccard',
-            'dice'],
-        metavar='C',
-        help='loss function [default: %(default)s]')
-    parser.add(
-        '--optim',
-        '-O',
-        default='sgd',
-        choices=[
-            'sgd',
-            'adam',
-            'lbfgs'],
-        help='optimization algorithm [default: %(default)s]')
-    parser.add('--valid-fraction', '-v', default=0.25, type=float,
-               help='validation set fraction [default: %(default)s]')
-    parser.add(
-        '--stratify',
-        type=int,
-        default=1,
-        help='stratify train/test split according to image size [default: %(default)s]')
-    parser.add('--print-every', '-p', default=10, type=int,
-               metavar='N', help='print frequency [default: %(default)s]')
-    parser.add('--save-every', '-S', default=10, type=int,
-               metavar='N', help='save frequency [default: %(default)s]')
-    parser.add('--eval-every', default=10, type=int,
-               metavar='N', help='eval frequency [default: %(default)s]')
-    parser.add(
-        '--patience',
-        default=3,
-        type=int,
-        metavar='N',
-        help='patience for lr scheduler, in epochs [default: %(default)s]')
-    parser.add(
-        '--patience-threshold',
-        default=.1,
-        type=float,
-        metavar='N',
-        help='patience threshold for lr scheduler [default: %(default)s]')
-    parser.add('--cooldown', default=5, type=int, metavar='N',
-               help='cooldown for lr scheduler [default: %(default)s]')
-    parser.add('--lr-decay', default=.1, type=float, metavar='N',
-               help='decay factor for lr scheduler [default: %(default)s]')
-    parser.add(
-        '--switch-to-lbfgs',
-        default=0,
-        type=int,
-        metavar='N',
-        help='if lr scheduler reduces rate, switch to lbfgs [default: %(default)s]')
-    parser.add('--resume', default='', type=str, metavar='PATH',
-               help='path to latest checkpoint [default: %(default)s]')
+    parser.add('--resume', type=str, metavar='PATH',
+               help='path to latest checkpoint')
     parser.add(
         '--override-model-opts',
         type=csv_list,
         default='override-model-opts,resume,experiment,out-dir,save-every,print-every,eval-every,scheduler,log-file',
         help='when resuming, change these options [default: %(default)s]')
+    parser.add('--force-overwrite', type=int, default=0,
+               help='overwrite existing checkpoint, if it exists [default: %(default)s]')
     parser.add(
         '--calc-iou',
         type=int,
@@ -744,18 +615,154 @@ def main():
         '--predictions-file',
         type=str,
         help='file name for predictions output')
+    parser.add('--data', '-d', metavar='DIR', required=True,
+               help='path to dataset')
+    parser.add('--stage', '-s', default='stage1',
+               help='stage [default: %(default)s]')
+    parser.add('--group', '-g', default='train',
+               help='group name [default: %(default)s]')
+    parser.add('--valid-fraction', '-v', default=0.25, type=float,
+               help='validation set fraction [default: %(default)s]')
+    parser.add(
+        '--stratify',
+        type=int,
+        default=1,
+        help='stratify train/test split according to image size [default: %(default)s]')
+    parser.add('--epochs', default=1, type=int, metavar='N',
+               help='number of total epochs to run [default: %(default)s]')
+    parser.add('-b', '--batch-size', default=1, type=int,
+               metavar='N', help='mini-batch size [default: %(default)s]')
+    parser.add(
+        '--grad-accum',
+        default=1,
+        type=int,
+        metavar='N',
+        help='number of batches between gradient descent [default: %(default)s]')
+    parser.add(
+        '--weight-init',
+        default='kaiming',
+        choices=[
+            'kaiming',
+            'xavier',
+            'default'],
+        help='weight initialization method default: %(default)s]')
+    parser.add(
+        '--predictor-field',
+        type=str,
+        default='images_prep',
+        help='dataset field to pass to model as input [default: %(default)s]')
+    parser.add(
+        '--target-fields',
+        type=csv_list,
+        default='masks_prep_bin',
+        help='dataset fields(s) to use as target [default: %(default)s]')
+    parser.add(
+        '--criterion',
+        '-C',
+        default='bce',
+        choices=[
+            'mse',
+            'bce',
+            'jaccard',
+            'dice'],
+        help='type of loss function [default: %(default)s]')
+    parser.add(
+        '--use-instance-weights',
+        default=0,
+        type=int,
+        metavar='N',
+        help='apply instance weights during training [default: %(default)s]')
+    parser.add('--weight-decay', default=1e-4, type=float,
+               metavar='W', help='weight decay [default: %(default)s]')
+    parser.add(
+        '--optim',
+        '-O',
+        default='adam',
+        choices=[
+            'sgd',
+            'adam',
+            'lbfgs'],
+        help='optimization algorithm [default: %(default)s]')
+    parser.add(
+        '--lr',
+        '--learning-rate',
+        default=0.001,
+        type=float,
+        metavar='LR',
+        help='initial learning rate [default: %(default)s]')
+    parser.add('--momentum', '-m', default=0.9, type=float, metavar='M',
+               help='momentum [default: %(default)s]')
+    parser.add('--history-size', type=int, default=100,
+               help='history size for lbfgs [default: %(default)s]')
+    parser.add('--max-iter-lbfgs', type=int, default=20,
+               help='maximum iterations for lbfgs [default: %(default)s]')
+    parser.add(
+        '--tolerance-change',
+        type=float,
+        default=0.01,
+        help='tolerance for termination for lbfgs [default: %(default)s]')
+    parser.add(
+        '--scheduler',
+        default='none',
+        choices=[
+            'none',
+            'plateau',
+            'exp',
+            'multistep'],
+        help='learn rate scheduler [default: %(default)s]')
+    parser.add('--lr-decay', default=.1, type=float, metavar='N',
+               help='decay factor for lr scheduler [default: %(default)s]')
+    parser.add('--min-lr', default=0.0001, type=float, metavar='N',
+               help='minimum learn rate for scheduler [default: %(default)s]')
+    parser.add(
+        '--patience',
+        default=3,
+        type=int,
+        metavar='N',
+        help='patience for lr scheduler, in epochs [default: %(default)s]')
+    parser.add('--cooldown', default=5, type=int, metavar='N',
+               help='cooldown for lr scheduler [default: %(default)s]')
+    parser.add(
+        '--patience-threshold',
+        default=.1,
+        type=float,
+        metavar='N',
+        help='patience threshold for lr scheduler [default: %(default)s]')
+    parser.add(
+        '--scheduler_milestones',
+        type=int_list,
+        default='200',
+        help='list of epoch milestones for multistep scheduler')
+    parser.add(
+        '--switch-to-lbfgs',
+        default=0,
+        type=int,
+        metavar='N',
+        help='if lr scheduler reduces rate, switch to lbfgs [default: %(default)s]')
+    parser.add(
+        '--clip-gradient',
+        default=0.25,
+        type=float,
+        metavar='C',
+        help='clip excessive gradients during training [default: %(default)s]')
+    parser.add('--print-every', '-p', default=20, type=int,
+               metavar='N', help='print frequency [default: %(default)s]')
+    parser.add('--save-every', '-S', default=50, type=int,
+               metavar='N', help='save frequency [default: %(default)s]')
+    parser.add('--eval-every', default=100, type=int,
+               metavar='N', help='eval frequency [default: %(default)s]')
     parser.add('--random-seed', type=int, default=2018,
                help='set random number generator seed [default: %(default)s]')
     parser.add('--verbose', '-V', type=int, default=0, help='verbose logging')
-    parser.add('--force-overwrite', type=int, default=0,
-               help='overwrite existing checkpoint, if it exists')
     parser.add('--log-file', help='write logging output to file')
-    parser.add('--cuda', type=int, default=0, help='use cuda')
+    parser.add('-j', '--workers', default=1, type=int, metavar='N',
+               help='number of data loader workers [default: %(default)s]')
+    parser.add('--cuda', type=int, default=0, help='use cuda [default: %(default)s]')
     parser.add(
         '--cuda-benchmark',
         type=int,
         default=0,
-        help='use cuda benchmark mode')
+        help='use cuda benchmark mode [default: %(default)s]')
 
     args = parser.parse_args()
 
@@ -850,7 +857,7 @@ def main():
         raise ValueError("Only supported models are cnn or knn")
 
     # optionally resume from a checkpoint
-    if args.resume:
+    if args.resume is not None:
         model = load_checkpoint(
             checkpoint_file_from_dir(
                 args.resume), model, None, global_state)
