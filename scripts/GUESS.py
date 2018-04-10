@@ -9,7 +9,7 @@ class GUESS():
 
 
 
-    def transform_into(self,img,sub_img,p,method='diff',show=False):
+    def transform_into(self,img,sub_img,p,method='diff',show=False,safe=None):
         if img.ndim==2:
             img=img[:,:,None]
         if img.shape[2]==1:
@@ -65,13 +65,15 @@ class GUESS():
         else:
                 print "unsupported method"
 
-        img=img.astype(np.float)
-        img[:,:,:3]/=2
+        #img=img.astype(np.float)
+        #img[:,:,:3]/=2
 
         #original scoring
 	#img[(img<0) * (img>-25)]=-25 # higher pentaly here #TODO FILL IN WITH BACKGROUND VARIANCE?
         #new scoring?
-	img[(img<0)]=-250 # higher pentaly here #TODO FILL IN WITH BACKGROUND VARIANCE?
+        #img[(img>20) * (img<150)]=0 # give no penalty to the inside of nuclei match? only bounds and outside of bounds?
+        img[safe>0]=0
+	img[(img<-50)]=-250 # higher pentaly here #TODO FILL IN WITH BACKGROUND VARIANCE?
 	img=np.absolute(img)
 
         mse=np.multiply(img,img).sum()
@@ -79,7 +81,8 @@ class GUESS():
 	#lets get an image without the region of interest 
 
 	if show:
-                img2=img[:,:,:3].copy()*2
+                img2=img[:,:,:3].copy()
+                img2[img2<0]=255
 		#img2=(img2/img2.max())*255
 		img2=img2.astype(np.uint8)
                 cv2.imshow('curmask',img2)
@@ -223,7 +226,7 @@ class GUESS():
         blurred_boundary=blurred_boundary.astype(np.float)
         blurred_boundary/=blurred_boundary.max()
         blurred_boundary*=255
-        blurred_boundary=blurred_boundary.astype(np.uint8)
+        burred_boundary=blurred_boundary.astype(np.uint8)
 
         for x in xrange(mask.max()):
             idx=x+1
@@ -235,7 +238,7 @@ class GUESS():
 	    for cnt in contours:
                 rect = cv2.minAreaRect(cnt)
 	        ximg=self.crop_minAreaRect(sub_img,rect)
-	        ximg_mask=self.crop_minAreaRect(cur_mask,rect)
+	        ximg_mask=self.crop_minAreaRect(cur_mask,rect)*255
 	        ximg_bound=self.crop_minAreaRect(sub_bound,rect)
                 #cv2.imshow("BOUND",ximg_bound)
                 #cv2.waitKey(5000)
@@ -279,6 +282,81 @@ class GUESS():
     def fit(self):
         pass
 
+
+    def find_bound(self,img,safe):
+        # parameters , 
+        # Y shift 
+        # X shift
+        # Rotation
+        # X scale
+        # Y scale
+        shape = img.shape
+        height = shape[0]
+        width = shape[1]
+
+        safe=safe.copy()
+        safe[img>100]=0
+
+	base_mse=np.multiply(img.astype(np.float),img.astype(np.float)).sum()
+        #pick a random nuclei
+	small_it=40
+        keep=0.15
+        for yy in range(10):
+            nuclei,nuclei_mask,nuclei_bound=random.choice(self.nuclei)
+            #nuclei_and_bound=np.concatenate((nuclei,nuclei_bound[:,:,None]),axis=2)
+            #cv2.imshow("NUCLEI",nuclei)
+            #cv2.imshow("NUCLEI MASK",nuclei_bound)
+            #cv2.waitKey(20000)
+            means = [0,0,0,1,1]
+            vs = [ height*2, width*2 , 100, 2, 2 ]
+            meta_param = {'u':np.array(means), 'o':np.array(vs)}
+            best_p=None
+            best_score=100000000000000
+            cv2.imshow("NUCLEI MASK",nuclei_mask)
+            cv2.imshow("NUCLEI ",nuclei)
+            cv2.waitKey(100000)
+
+            for y in xrange(30):
+                params = np.random.multivariate_normal(meta_param['u'], np.diag(meta_param['o']), small_it*10)
+                scores=[]
+                for x in xrange(params.shape[0]):
+                    #mse,_=self.transform_into(img,nuclei_bound,params[x],show=False,safe=safe)
+                    mse,_=self.transform_into(img,nuclei_mask,params[x],show=True,safe=safe)
+                    if mse==0:
+                        continue
+                    #if mse>=0:
+                    if len(scores)>=small_it:
+                        break
+                    scores.append((mse,x))
+                if len(scores)==0:
+                    print "SOMETHING BAD HAPPPEND"
+                scores.sort(reverse=True)
+                tops=np.vstack([ params[i] for x,i in scores[int(len(scores)*(1-keep)):] ])
+                meta_param['u']=meta_param['u']*0.5+0.5*tops.mean(0)
+                meta_param['o']=meta_param['o']*0.5+0.5*tops.var(0)
+                #print meta_param['o']
+                meta_param['o'][2]=max(meta_param['o'][2],1)
+                meta_param['u'][3]=max(meta_param['u'][3],0.5)
+                meta_param['u'][4]=max(meta_param['u'][4],0.5)
+                #box=cv2.boxPoints(rect)
+                #print sub_img[box]
+                print best_score,scores[0],meta_param['o']
+                if scores[0][0]<0:
+                    cv2.waitKey(5000)
+                if best_score>scores[0][0]:
+                    best_score=scores[0][0]
+                    best_p=params[scores[0][1]]
+                    self.transform_into(img,nuclei,best_p,show=True)
+                    cv2.waitKey(20)
+                #_,i=self.transform_into(img,nuclei,best_p,show=True)
+                #cv2.imshow('x',i)
+                #cv2.waitKey(1000)
+            print "BEST", best_score,best_p
+            self.transform_into(img,nuclei,best_p,show=True)
+            cv2.waitKey(20000)
+            #_,img=self.transform_into(img,nuclei_mask*0,best_p,show=True,method='paste')
+            #cv2.waitKey(100)
+
     def predict(self,img,bound=None,torch=True):
         if torch:
             img = (img.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
@@ -297,9 +375,9 @@ class GUESS():
         #pick a random nuclei
         print img.shape,bound.shape
         img_and_bound=np.concatenate((img,bound),axis=2)
-	small_it=80
+	small_it=50
         keep=0.15
-        for yy in range(1):
+        for yy in range(10):
             nuclei,nuclei_mask,nuclei_bound=random.choice(self.nuclei)
             nuclei_and_bound=np.concatenate((nuclei,nuclei_bound[:,:,None]),axis=2)
             cv2.imshow("NUCLEI",nuclei)
@@ -314,7 +392,7 @@ class GUESS():
                 params = np.random.multivariate_normal(meta_param['u'], np.diag(meta_param['o']), small_it*10)
                 scores=[]
                 for x in xrange(params.shape[0]):
-                    mse,_=self.transform_into(img_and_bound,nuclei_and_bound,params[x],show=True)
+                    mse,_=self.transform_into(img_and_bound,nuclei_and_bound,params[x],show=False)
                     if mse==0:
                         continue
                     #if mse>=0:

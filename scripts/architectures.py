@@ -12,7 +12,7 @@ from torch.nn.utils import weight_norm
 
 from groupnorm import GroupNorm
 
-INPLACE = True
+INPLACE = False
 
 def init_weights(net, method='kaiming'):
     if method not in ['kaiming', 'xavier']:
@@ -197,16 +197,16 @@ class CNN(nn.Module):
 ## (adapted from python 3, and gray scale images)
 
 DROPOUT = 0.5
-
+k=3
 class UNetBlock(nn.Module):
     def __init__(self, filters_in, filters_out):
         super(UNetBlock, self).__init__()
         self.filters_in = filters_in
         self.filters_out = filters_out
-        self.conv1 = nn.Conv2d(filters_in, filters_out, (3, 3), padding=1)
+        self.conv1 = nn.Conv2d(filters_in, filters_out, (k, k), padding=k/2)
         #self.norm1 = nn.BatchNorm2d(filters_out)
         self.norm1 = GroupNorm(filters_out, filters_out)
-        self.conv2 = nn.Conv2d(filters_out, filters_out, (3, 3), padding=1)
+        self.conv2 = nn.Conv2d(filters_out, filters_out, (k, k), padding=k/2)
         #self.norm2 = nn.BatchNorm2d(filters_out)
         self.norm2 = GroupNorm(filters_out, filters_out)
 
@@ -239,7 +239,7 @@ class UNetDownBlock(UNetBlock):
 class UNetUpBlock(UNetBlock):
     def __init__(self, filters_in, filters_out):
         super(UNetUpBlock, self).__init__(filters_in, filters_out)
-        self.upconv = nn.Conv2d(filters_in, filters_in // 2, (3, 3), padding=1)
+        self.upconv = nn.Conv2d(filters_in, filters_in // 2, (k, k), padding=k/2)
         #self.upnorm = nn.BatchNorm2d(filters_in // 2)
         self.upnorm = GroupNorm(filters_in // 2, filters_in // 2)
 

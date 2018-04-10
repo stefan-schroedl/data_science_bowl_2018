@@ -74,15 +74,18 @@ d=load_dataset(data_dir)
 model = UNetClassify(layers=4, init_filters=32)
 
 
+cuda=False
+if cuda:
+    model=model.cuda()
 
 #im_torch=Variable(n2t(im_in).unsqueeze(0))
 #print im_torch.size()
 #out=model.forward(im_torch)
 #print out.size()
 #criterion=nn.BCELoss()
-#criterion=nn.MSELoss()
-criterion=nn.BCEWithLogitsLoss()
-optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+criterion=nn.MSELoss()
+#criterion=nn.BCEWithLogitsLoss()
+optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
 batch_size=1
 model.train()
 for batch_id in xrange(10000):
@@ -90,10 +93,13 @@ for batch_id in xrange(10000):
     mini_loss=0
     for img_id in xrange(batch_size):
         im_id=random.choice(train_d.keys())
-        while pred_ty not in train_d[im_id]:
+        while pred_ty not in train_d[im_id] or load_image(data_dir,train_d[im_id]['seg']).shape[0]>350:
             im_id=random.choice(train_d.keys())
         im_in=Variable(n2t(load_image(data_dir,train_d[im_id]['seg'])).unsqueeze(0))
-        im_out=Variable(n2t(dilate(load_image(data_dir,train_d[im_id]['bounds'],c=0))).unsqueeze(0))
+        im_out=Variable(n2t(dilate(load_image(data_dir,train_d[im_id][pred_ty],c=0))).unsqueeze(0))
+        if cuda:
+            im_in=im_in.cuda()
+            im_out=im_out.cuda()
         output = model(im_in)
         loss = criterion(output, im_out)
         mini_loss+=loss.data[0]

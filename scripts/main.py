@@ -378,6 +378,9 @@ iou_el=[]
 iou_elr=[]
 iou_clus=[]
 iou_clusr=[]
+iou_clusr2=[]
+iou_clusr3=[]
+iou_clusr4=[]
 
 def validate_knn(model, loader, criterion):
     running_loss = 0.0
@@ -390,11 +393,14 @@ def validate_knn(model, loader, criterion):
         return 
     for d in tqdm(enumerate(loader)):
         i+=1
+        if valn==1 and i==1:
+            continue
         #model.prepare_fit(d[1]['images'],d[1]['masks_prep'],d[1]['masks_prep_seg'])
+        print d[1].keys()
         img=d[1]['images']
         labels=d[1]['masks_prep']
         labels_seg=d[1]['masks_prep_seg']
-        p=model.predict(img)
+        p=model.predict(img,gt=d[1]['masks'])
         #p_img,p_seg,p_boundary,p_blend,p_super_boundary,p_super_boundary_2,l,l2,el,clus=model.predict(img)
 
         torch_p_seg = torch.from_numpy(p['seg'][None,:,:].astype(np.float)/255).float()
@@ -411,6 +417,11 @@ def validate_knn(model, loader, criterion):
         cv2.imwrite(args.prefix+'%d_%d.png' % (valn,i),whole)
         cv2.imwrite(args.prefix+'%d_%d_patch.png' % (valn,i),stack_images(p['similar_patch_images']))
         cv2.imwrite(args.prefix+'%d_%d_hist.png' % (valn,i),stack_images(p['similar_hist_images']))
+        for k in p.keys():
+            try:
+                cv2.imwrite(args.prefix+'%d_%d_%s.png' % (valn,i,k),p[k])
+            except:
+                pass
         #cv2.imshow('pbound',p_boundary)
 
         #get iou using parametric
@@ -432,7 +443,10 @@ def validate_knn(model, loader, criterion):
         iou_clus.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered'],print_table=True))
         iou_clusr.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_remove']))
         iou_elr.append(iou_metric(torch_to_numpy(labels,scale=1),p['enhanced_label_remove']))
-        s="\t".join(map(lambda x : str(x) , ["IOU",iou_pipe[-1],iou_l[-1],iou_l2[-1],iou_el[-1],iou_clus[-1],iou_elr[-1],iou_clusr[-1],"XXXXX",sum(iou_pipe)/len(iou_pipe),sum(iou_l)/len(iou_l),sum(iou_l2)/len(iou_l2),sum(iou_el)/len(iou_el),sum(iou_clus)/len(iou_clus),sum(iou_elr)/len(iou_elr),sum(iou_clusr)/len(iou_clusr)]))
+        iou_clusr2.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r2']))
+        iou_clusr3.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r3']))
+        iou_clusr4.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r4']))
+        s="\t".join(map(lambda x : str(x) , ["IOU",iou_pipe[-1],iou_l[-1],iou_l2[-1],iou_el[-1],iou_clus[-1],iou_elr[-1],iou_clusr[-1],iou_clusr2[-1],iou_clusr3[-1],iou_clusr4[-1],"\nXXXXX\n",sum(iou_pipe)/len(iou_pipe),sum(iou_l)/len(iou_l),sum(iou_l2)/len(iou_l2),sum(iou_el)/len(iou_el),sum(iou_clus)/len(iou_clus),sum(iou_elr)/len(iou_elr),sum(iou_clusr)/len(iou_clusr),sum(iou_clusr2)/len(iou_clusr2),sum(iou_clusr3)/len(iou_clusr3),sum(iou_clusr4)/len(iou_clusr4)]))
         print s
         f=open(args.prefix+'%d_%d.txt' % (valn,i),'w')
         f.write(s+'\n')
@@ -552,7 +566,8 @@ def train_knn(
                     global_state['best_loss'] = l
                     global_state['best_it'] = global_state['it']
                     is_best = True
-    return global_state['it'], global_state['best_loss'], global_state['best_it']
+    #return global_state['it'], global_state['best_loss'], global_state['best_it']
+    return global_state['it'], global_state['best_loss'], global_state['best_it'], 0, 0, 0, 0, 0, 0
 
 
 def backprop_weight(labels, pred, global_state, thresh=0.1):

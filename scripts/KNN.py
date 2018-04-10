@@ -8,7 +8,7 @@ import faiss
 from transform import random_rotate90_transform1
 from GUESS import *
 class KNN():
-    def __init__(self,n=5,hist_n=50,patch_size=13,sample=400,gauss_blur=False,similarity=False,normalize=True,super_boundary_threshold=20,erode=False,match_method='hist'):
+    def __init__(self,n=5,hist_n=10,patch_size=13,sample=400,gauss_blur=False,similarity=False,normalize=True,super_boundary_threshold=20,erode=False,match_method='hist'):
         print "SAMPLE IS ",sample, "SHOULD BE ~400?"
         print "TRY TO START WITH SUPER BOUNDARY INSTEAD OF JUST BOUNDARY>????"
         print "http://answers.opencv.org/question/60974/matching-shapes-with-hausdorff-and-shape-context-distance/"
@@ -326,6 +326,7 @@ class KNN():
 	gkernel=cv2.getGaussianKernel(ksize=self.boundary_patch_size,sigma=1)
 	gkernel=(gkernel*gkernel.T).reshape(-1)
         for xx in range(5):
+            print "ENHANCE",xx
             r=self.reconstruct(reconstructed,self.patches_super_boundary_numpy,self.boundary_patch_size,self.super_boundary_model)
             #take out border artifacts
             r[:2,:]=0
@@ -347,16 +348,25 @@ class KNN():
         return reconstructed
 
     def label(self,img,seg):
-        img[0,:]=255
-        img[-1,:]=255
-        img[:,0]=255
-        img[:,-1]=255
+        #img[0,:]=255
+        #img[-1,:]=255
+        #img[:,0]=255
+        #img[:,-1]=255
+        cv2.imshow("WTF WTF",img)
+        cv2.waitKey(100)
+        img[0,:]=seg[0,:]
+        img[-1,:]=seg[-1,:]
+        img[:,0]=seg[:,0]
+        img[:,-1]=seg[:,-1]
         img3=np.zeros((img.shape[0],img.shape[1],3))
         im2, contours, hierarchy = cv2.findContours(img, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         l = img[:,:]*0
         roots=set([])
         tree={}
         for x in xrange(len(contours)):
+	    #rect = cv2.minAreaRect(contours[x])
+            area = cv2.contourArea(contours[x])
+            print "AREA",area
             nxt,prv,child,parent = hierarchy[0][x]
             if parent>=0:
                 if parent not in tree:
@@ -377,7 +387,13 @@ class KNN():
             nxt,prv,child,parent = hierarchy[0][cur]
             if True:# child==-1 and a<0.3: #True: # and len(children[cur])<=2:
                 cv2.fillPoly(l, [contours[cur]], int(idx))
-                idx+=1
+                #if img[l==idx].mean()>253:
+                #    l[l==idx]=0
+                #elif seg[l==x].mean()<100:
+                #    l[l==idx]=1
+                #else:
+                if l[l==idx].sum()>0:
+                    idx+=1
             #add all the kids to the stack
             if cur in tree:
                 stack+=tree[cur]
@@ -388,13 +404,9 @@ class KNN():
         #or just start with the mask and then break it out ... that would actually work better?
         #print "HEUY HEFJLDKSJFL"
         #ssadfjkalsdfja
-        for x in xrange(idx):
-            if x<=1:
-                continue
-            if img[l==x].mean()>253:
-                l[l==x]=0
-            elif seg[l==x].mean()<50:
-                l[l==x]=1
+        #for x in xrange(idx):
+        #    if x<=1:
+        #        continue
         #cv2.imshow('img/l/l*255/contours',np.concatenate((img,l,l*255,cv2.drawContours(img*0, contours, -1, 255, 3)),axis=1))
         #cv2.imshow('img3',img3.astype(np.uint8))
         #cv2.waitKey(3)
@@ -403,9 +415,19 @@ class KNN():
 
     def color_label(self,labels,colors=None):
         out=np.zeros((labels.shape[0],labels.shape[1],3)).astype(np.uint8)
+        #if labels.ndim!=3:
+        #    labels=labels[:,:,None]
+        #if labels.shape[2]==1:
+        #    labels=np.concatenate((labels,labels,labels),axis=2)
+        labels=np.squeeze(labels)
+        print "LABL",labels.shape
         for x in xrange(labels.max()):
             color = np.random.randint(0,255,(3)).tolist() 
-            out[labels==(x+1)]=color
+	    print (labels==(x+1)).shape
+            print labels[labels==(x+1)].sum()
+            print labels[labels==(x+1)].shape
+	    if labels[labels==(x+1)].sum()>0:
+            	out[labels==(x+1)]=color
         return out
 
     def img_normalize(self,img):
@@ -452,6 +474,19 @@ class KNN():
         return img[y_start:y_end,x_start:x_end,:]
 
 
+    def blur_bounds(self,boundary):
+        k=9
+	boundary=np.squeeze(boundary).copy()
+	print "NBOUND",boundary.shape
+        blurred_boundary=np.maximum(boundary,cv2.GaussianBlur(boundary,(k,k),0))
+        for x in xrange(10):
+            blurred_boundary=np.maximum(boundary,cv2.GaussianBlur(blurred_boundary,(k,k),0))
+        blurred_boundary=blurred_boundary.astype(np.float)
+        blurred_boundary/=blurred_boundary.max()
+        blurred_boundary*=255
+        burred_boundary=blurred_boundary.astype(np.uint8)
+	return burred_boundary
+
     def by_cluster(self,img,reconstructed,similar_contours):
         assert(reconstructed.shape[2]==self.channels)
         img=img.copy()
@@ -470,6 +505,7 @@ class KNN():
         marking_idx=2
         labels=np.ones_like(reconstructed_mask).astype(np.int32)
         enhanced=self.enhance(self.img_normalize(reconstructed_super_boundary),self.img_normalize(reconstructed_super_boundary_2))
+        #enhanced=self.enhance(self.img_normalize(reconstructed_super_boundary),self.img_normalize(reconstructed_super_boundary_2))
         _,enhanced_thresh=cv2.threshold(enhanced,80,255,cv2.THRESH_BINARY)
         enhanced_thresh=-enhanced_thresh+255
         #enhanced_thresh=np.maximum(enhanced_thresh,reconstructed_mask_thresh) # make sure to not remove the original bounds?
@@ -499,21 +535,41 @@ class KNN():
 		rect = cv2.minAreaRect(contours[x])
                 roi_sq_crop = self.crop(roi_img,cv2.boundingRect(contours[x]),bound=50)
                 roi_boundary = roi[:,:,4].astype(np.uint8)
-                if False and roi_sq_crop.shape[0]*roi_sq_crop.shape[1]>5000:
+                roi_mask = roi[:,:,3].astype(np.uint8)
+                if True and roi_sq_crop.shape[0]*roi_sq_crop.shape[1]>5000:
                     print rect
                     roi_cropped=self.crop_minAreaRect(roi_img, rect)
                     roi_sq_crop_bound=self.crop(roi_boundary[:,:,None],cv2.boundingRect(contours[x]),bound=50).astype(np.float)
+                    roi_sq_crop_mask=self.crop(roi_mask[:,:,None],cv2.boundingRect(contours[x]),bound=50).astype(np.uint8)
+		    
                     roi_sq_crop_bound/=roi_sq_crop_bound.max()
                     roi_sq_crop_bound*=255
                     roi_sq_crop_bound=roi_sq_crop_bound.astype(np.uint8)
-                    cv2.imshow('bound',roi_sq_crop_bound)
-                    cv2.waitKey(5000)
-                    self.guess.predict(roi_sq_crop,bound=roi_sq_crop_bound,torch=False)
-                roi_mask = roi[:,:,3].astype(np.uint8)
+
+
+		    ret2,otsu = cv2.threshold(roi_sq_crop_mask,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+		    thresh=roi_sq_crop_mask[roi_sq_crop_mask>0].mean()
+		    ret2,safe = cv2.threshold(roi_sq_crop_mask,thresh,255,cv2.THRESH_BINARY)
+		    #while thresh<roi_sq_crop_mask.max():
+		    #thresh+=5
+		    #	ret2,safe = cv2.threshold(roi_sq_crop_mask,thresh,255,cv2.THRESH_BINARY)
+                    #	cv2.imshow('th',safe)
+                    #	cv2.waitKey(50000)
+		    #kernel = np.ones((3,3), np.uint8)
+		    #for i in xrange(10):
+		    #	emask = cv2.erode(roi_sq_crop_mask, kernel, iterations=i)
+                    #	cv2.imshow('emask',emask)
+                    #	cv2.waitKey(50000)
+                    #cv2.imshow('otsu',otsu)
+                    #cv2.imshow('bound',self.blur_bounds(roi_sq_crop_bound))
+                    #cv2.waitKey(50000)
+                    #self.guess.predict(roi_sq_crop,bound=roi_sq_crop_bound,torch=False)
+		    #self.guess.find_bound(self.blur_bounds(roi_sq_crop_bound),otsu)
                 roi_blend = roi[:,:,5].astype(np.uint8)
                 roi_super_boundary = roi[:,:,6].astype(np.uint8)
                 roi_super_boundary_2 = roi[:,:,7].astype(np.uint8)
                 roi_enhanced_thresh=np.multiply(roi_mask,enhanced_thresh)
+		print "CJECK THIS!"
                 _, roi_contours, roi_hierarchy = cv2.findContours(roi_enhanced_thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 if len(roi_contours)>0:
                     cv2.fillPoly(labels, [contours[x]], 0)
@@ -537,11 +593,11 @@ class KNN():
         #water=cv2.watershed(img,labels)-1
         water=cv2.watershed(cv2.cvtColor(reconstructed_mask, cv2.COLOR_GRAY2BGR),labels)-1
         water[water<0]=0 # set bg and unknown to 0
-        cv2.imshow('labeled', self.color_label(labels))
-        cv2.imshow('water', self.color_label(water))
-        cv2.imshow('img',img)
-        cv2.waitKey(20)
-        return water
+        #cv2.imshow('labeled', self.color_label(labels))
+        #cv2.imshow('water', self.color_label(water))
+        #cv2.imshow('img',img)
+        #cv2.waitKey(20)
+        return enhanced,water
 
         #get the clusters from the mask
 
@@ -570,6 +626,21 @@ class KNN():
         return similar_images_idxs
 
 
+    def shrink_nuclei(self,labels):
+        labels_new=labels*0
+        kernel = np.ones((3,3), np.uint8)
+        offset=0
+        for x in xrange(labels.max()):
+            idx=x+1
+            cur_mask = np.zeros_like(labels).astype(np.uint8)
+            cur_mask[labels==idx]=255
+            cur_mask = cv2.erode(cur_mask, kernel, iterations=1)
+            if cur_mask.sum()<100:
+                offset+=1
+            else:
+                labels_new[cur_mask>100]=idx-offset
+        return labels_new
+
     def remove_overlap(self,labels):
         overlaps= np.zeros_like(labels).astype(np.uint8)
         kernel = np.ones((5,5), np.uint8)
@@ -584,38 +655,54 @@ class KNN():
         labels[overlaps>1]=0
         return labels
 
-    def predict(self,img):
+    def remove_weird_labels(self,l,mask):
+        l=l.copy()
+        offset=0
+        for x in xrange(l.max()):
+            if x<=0:
+                continue
+            if mask[l==x].mean()<60:
+                l[l==x]=0
+                offset+=1
+            else:
+                l[l==x]=x-offset
+        return l
+
+    def predict(self,img,gt=None):
         print "CONVEX HULL CHECK"
         print "SHRINK ALL BOUNDARIES, ESPECIALLY THOSE WITH OTHER MASKS NEARBY! OVERLAP -> 0 PREDICTION"
         print "TODO: subtract super boundaries from regular"
-        print "START PREDICT"
+        print "START PREDICT",len(self.images)
 	img = (img.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
+	gt = (gt.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
 
         similar_contours = []
 
         similar_hist_images=[]
         similar_hist_images_idxs=self.similar_by_hist(img)
         for idx in similar_hist_images_idxs:
-            img2,_,_,_ = self.images[idx]
-            similar_hist_images.append(cv2.resize(img2, (256, 256)))
-            #similar_hist_images.append(imutils.resize(img2, height=256,width=256))
-            #cv2.imshow("y",img2)
-            #cv2.waitKey(2000)
+            if idx>=0:
+                img2,_,_,_ = self.images[idx]
+                similar_hist_images.append(cv2.resize(img2, (256, 256)))
+                #similar_hist_images.append(imutils.resize(img2, height=256,width=256))
+                #cv2.imshow("y",img2)
+                #cv2.waitKey(2000)
 
         similar_patch_images=[]
         similar_patch_images_idxs=self.similar_by_patches(img)
         for idx in similar_patch_images_idxs:
-            img2,_,_,_ = self.images[idx]
-            similar_patch_images.append(cv2.resize(img2, (256, 256)))
-            #similar_patch_images.append(imutils.resize(img2, height=256).astype(np.uint8))
-            #cv2.imshow("x",similar_patch_images[-1])
-            #cv2.waitKey(2000)
+            if idx>=0:
+                img2,_,_,_ = self.images[idx]
+                similar_patch_images.append(cv2.resize(img2, (256, 256)))
+                #similar_patch_images.append(imutils.resize(img2, height=256).astype(np.uint8))
+                #cv2.imshow("x",similar_patch_images[-1])
+                #cv2.waitKey(2000)
 
         patch_model = None
         super_boundary_model = None
         if self.match_method=='hist':
             patch_model,self.super_boundary_model, self.super_boundary_2_model = self.make_index(similar_hist_images_idxs) #,use_all=True)
-            #self.guess_prepare(similar_hist_images_idxs)
+            self.guess_prepare(similar_hist_images_idxs)
         elif self.match_method=='patch':
             patch_model,self.super_boundary_model, self.super_boundary_2_model = self.make_index(similar_patch_images_idxs) #,use_all=True)
         else:
@@ -677,9 +764,10 @@ class KNN():
 	reconstructed_mask_eroded = reconstructed[:,:,7].astype(np.uint8)
 
         #cv2.imshow('mask vs eroded',np.concatenate((reconstructed_mask,reconstructed_mask_eroded),axis=1))
+        _,reconstructed_mask_thresh = cv2.threshold(reconstructed_super_boundary,self.super_boundary_threshold,255,cv2.THRESH_BINARY)
         #cv2.waitKey(10)
-
-        clustered=self.by_cluster(img,reconstructed,similar_contours)
+        print "HIGHER THRESHOLD!!!! ON MASK!!!!"
+        enhanced,clustered=self.by_cluster(img,reconstructed,similar_contours)
 
         _,reconstructed_super_boundary_thresh = cv2.threshold(reconstructed_super_boundary,self.super_boundary_threshold,255,cv2.THRESH_BINARY)
         labeled=self.label(reconstructed_super_boundary_thresh,reconstructed_mask).astype(np.int32)-1 #background from 1 -> 0
@@ -691,15 +779,25 @@ class KNN():
         #cv2.waitKey(3)
         print "SHRINK TRAINING MASKS?????!?!??!?!?!?!?"
         print "TODO ADD THIS ON A PER TILE BASIS? NORMALIZE THERE?"
-        enhanced=self.enhance(self.img_normalize(reconstructed_super_boundary),self.img_normalize(reconstructed_super_boundary_2))
+        #enhanced=self.enhance(self.img_normalize(reconstructed_super_boundary),self.img_normalize(reconstructed_super_boundary_2))
         #enhance_boundary = cv2.Laplacian(enhanced,cv2.CV_8U,ksize=13)
         #cv2.imshow('lap',enhance_boundary)
+        #cv2.imshow('enhanced before threshold',enhanced)
+        #cv2.waitKey(10000)
         _,enhanced_thresh = cv2.threshold(enhanced,self.super_boundary_threshold*4,255,cv2.THRESH_BINARY)
         #print enhanced.shape,enhanced_thresh.shape
         enhanced_label = self.label(enhanced_thresh,reconstructed_mask).astype(np.int32)
-        enhanced_label = cv2.watershed(img,enhanced_label)-1
+        #enhanced_label = cv2.watershed(img,enhanced_label)-1
+        #cv2.imshow("RECON MASK",reconstructed_mask)
+        #enhanced_label = cv2.watershed(cv2.cvtColor(reconstructed_mask, cv2.COLOR_GRAY2BGR),enhanced_label)-1
+        #cv2.imshow('AFTER WATER',self.color_label(enhanced_label))
+        #cv2.waitKey(10000)
+        #sys.exit(1)
         enhanced_label[enhanced_label<0]=0
         enhanced_label=enhanced_label.astype(np.uint8)
+
+
+        enhanced_label=self.remove_weird_labels(enhanced_label,reconstructed_mask)
         #cv2.imshow('en',enhanced_thresh)
         d={}
         d['img']=reconstructed_img
@@ -708,6 +806,22 @@ class KNN():
         d['blend']=reconstructed_blend
         d['super_boundary']=reconstructed_super_boundary
         d['super_boundary_2']=reconstructed_super_boundary_2
+	#cv2.imshow('boundary',reconstructed_boundary)
+	#cv2.imshow('boundarys',reconstructed_super_boundary)
+	#cv2.imshow('boundarys2',reconstructed_super_boundary_2)
+	ret2,otsu = cv2.threshold(reconstructed_mask,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+	dist_transform = cv2.distanceTransform(otsu,cv2.DIST_L2,5)
+	dist_transform = ((dist_transform/dist_transform.max())*255).astype(np.uint8)
+	#cv2.imshow("DIST",dist_transform)
+	#cv2.imshow("MASK",otsu)
+	d['otsu']=otsu
+	d['otsu_dist']=dist_transform
+        #laplacian = cv2.Laplacian(dist_transform,cv2.CV_64F)
+        #laplacian = ((laplacian/laplacian.max())*255).astype(np.uint8)
+        #cv2.imshow("LAPLAC",laplacian)
+        #cv2.waitKey(500000)
+        #sys.exit(1)
+	#cv2.waitKey(5000000)
         d['labeled']=labeled
         d['labeled2']=labeled2
         d['enhanced_label']=enhanced_label
@@ -716,8 +830,17 @@ class KNN():
         d['similar_hist_images']=similar_hist_images
         d['enhanced_label_remove']=self.remove_overlap(d['enhanced_label'])
         d['clustered_remove']=self.remove_overlap(d['clustered'])
-        cv2.imshow('color lab l',np.concatenate((self.color_label(labeled,reconstructed_mask),self.color_label(labeled2,reconstructed_mask),self.color_label(enhanced_label,reconstructed_mask),self.color_label(d['enhanced_label_remove'],reconstructed_mask),img),axis=1))
-        cv2.waitKey(2)
+        d['clustered_r2']=self.remove_weird_labels(d['clustered'],reconstructed_mask)
+        d['clustered_r3']=self.remove_weird_labels(d['clustered_remove'],reconstructed_mask)
+        d['clustered_r4']=self.shrink_nuclei(d['clustered'])
+	d['gt']=gt
+	for x in ['labeled','labeled2','enhanced_label','clustered','enhanced_label_remove','clustered_remove','clustered_r2','clustered_r3','clustered_r4']:
+		d["color_"+x]=self.color_label(d[x])
+        print "MAX IN LABELS",labeled.max(),labeled2.max(),enhanced_label.max()
+        cv2.imshow('gt',gt)
+        cv2.imshow('color lab l',np.concatenate((self.color_label(labeled),self.color_label(labeled2),self.color_label(enhanced_label),self.color_label(d['enhanced_label_remove']),img),axis=1))
+        cv2.imshow('color lab x',np.concatenate((self.color_label( d['clustered']),self.color_label( d['clustered_remove']),self.color_label(d['clustered_r4'])),axis=1))
+        cv2.waitKey(20000)
         return d 
     
     
