@@ -43,7 +43,7 @@ def is_inverted(img, invert_thresh_pd=10.0):
             img_th == 0))
 
 
-def torch_to_numpy(t):
+def torch_img_to_numpy(t):
     t = t.numpy().squeeze()
     if t.ndim > 2:
         t = t.transpose(1, 2, 0)
@@ -51,7 +51,7 @@ def torch_to_numpy(t):
     return t
 
 
-def numpy_to_torch(n, unsqueeze=False):
+def numpy_img_to_torch(n, unsqueeze=False):
     n = np.ascontiguousarray(n)
     # to avoid 'negative stride' error -
     # see https://discuss.pytorch.org/t/problem-with-reading-pfm-image/2924
@@ -267,6 +267,41 @@ def redilate_mask(mask_seg, sz=2, skip_clusters=1e20):
     return mask_dil
 
 
+# training images and masks can be resized, but validation and test images cannot
+
+def preprocess_img(x, dset_type):
+    if dset_type == 'train':
+        w = 512
+        h = 512
+        x = transform.resize(x, (w, h))
+        # transform.resize() changes type to float!
+        x = img_as_ubyte(x)
+    return x
+
+
+def preprocess_mask(x, dset_type):
+    if dset_type == 'train':
+        w = 512
+        h = 512
+        x = transform.resize(x, (w, h))
+        # transform.resize() changes type to float!
+        x = img_as_ubyte(x)
+        x = erode_mask(x)
+    return x
+
+
+def postprocess_prediction(pred, dset_type, sz=2, max_clusters_for_dilation=100, thresh=0.0):
+    # input is torch tensor of model prediction
+    # output is in numpy format
+    if not isinstance(pred, np.ndarray):
+        pred_np = pred.data.cpu().numpy().squeeze()
+    img_th = (pred_np > thresh).astype(int)
+
+    if dset_type == 'train':
+        img_th = redilate_mask(img_th, sz=sz, skip_clusters=max_clusters_for_dilation)
+    return img_th, pred_np
+
+
 def noop_augmentation():
     return iaa.Sequential([iaa.Noop()])
 
@@ -283,23 +318,6 @@ def nuc_augmentation():
                              order=[0, 1])),
         iaa.OneOf(iaa.Scale((0.5, 1.0)),
                   iaa.Crop(percent=(0.0, 0.25), keep_size=False))])
-
-
-def preprocess_img(x, w=None, h=None):
-    if w is not None:
-        x = transform.resize(x, (w, h))
-        # transform.resize() changes type to float!
-        x = img_as_ubyte(x)
-    return x
-
-
-def preprocess_mask(x, w=None, h=None):
-    if w is not None:
-        x = transform.resize(x, (w, h))
-        # transform.resize() changes type to float!
-        x = img_as_ubyte(x)
-    x = erode_mask(x)
-    return x
 
 
 ########
@@ -367,23 +385,6 @@ def random_rotate90_transform1(image, k):
         return image
 
 ####
-
-
-def postprocess_prediction(
-        pred,
-        sz=2,
-        max_clusters_for_dilation=100,
-        thresh=0.0):
-    # input is torch tensor of model prediction
-    # output is in numpy format
-    if not isinstance(pred, np.ndarray):
-        pred_np = pred.data.cpu().numpy().squeeze()
-    img_th = (pred_np > thresh).astype(int)
-    img_l = redilate_mask(
-        img_th,
-        sz=sz,
-        skip_clusters=max_clusters_for_dilation)
-    return img_l, pred_np
 
 # original classic processing, 'ali's pipeline'
 

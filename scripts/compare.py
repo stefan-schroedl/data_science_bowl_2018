@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import sys
 import os
 import configargparse
 from collections import OrderedDict
@@ -7,7 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 
-from utils import get_history_log, csv_list, moving_average, checkpoint_file_from_dir
+from utils import get_log, list_log_keys, csv_list, moving_average, checkpoint_file_from_dir
 import architectures
 
 
@@ -32,41 +33,33 @@ def parse_what_dict(specs):
     return what_dict
 
 
+crit_default = ('tr:train_last_loss,min;'
+                'tr_e:train_avg_loss,min;'
+                'ts:valid_avg_loss,min;'
+                'w:train_avg_inst_wt,mean;'
+                'ts_iou:valid_avg_iou,max;'
+                'tr_iou:train_avg_iou,max;'
+                'lr:lr,min;'
+                'grad:train_avg_grad,mean')
+
 parser = configargparse.ArgumentParser(
     description='compare multiple histories')
 parser.add('--config', '-c', is_config_file=True,
            help='config file path [default: %(default)s])')
-parser.add(
-    'files',
-    nargs='+',
-    type=str,
+parser.add('files', nargs='+', type=str,
     help='comma-delimited list of checkpoint files')
-parser.add(
-    '--out',
-    '-o',
-    help='file name for output image',
-    default='compare.png')
-parser.add(
-    '--crit-dict',
-    '-d',
-    help='dictionary of logged measures: abbrev:loggged_key,agg_func;...',
-    default='tr:running_train_loss,min;ts:running_valid_loss,min;tr_f:running_loss_last_closure,min;tr_ef:epoch_train_loss,min;w:epoch_wt,mean;ts_iou:running_valid_iou,max;tr_iou:epoch_train_iou,max;tr_e:epoch_train_loss,min;lr:lr,min;grad:running_grad,mean')
-parser.add('--what', '-w', type=csv_list, default='tr,tr_f,ts',
+parser.add('--out', '-o', help='file name for output image', default='compare.png')
+parser.add('--crit-dict', '-d',
+    help='dictionary of logged measures: <abbrev>:<loggged_key>,<agg_func>;...',
+    default=crit_default)
+parser.add('--what', '-w', type=csv_list, default='tr,tr_e,ts',
            help='list of plot types (tr, ts, tr_f, w, iou)')
 parser.add('--grad', '-g', type=int, default=1, help='plot gradients?')
-parser.add(
-    '--max-iter',
-    '-M',
-    default=100000,
-    type=int,
-    help='maximum iteration')
+parser.add('--max-iter', '-M', default=100000, type=int, help='maximum iteration')
 parser.add('--min-iter', '-m', default=-1, type=int, help='minimum iteration')
-parser.add(
-    '--max-y',
-    default=100000,
-    type=float,
-    help='maximum value to include')
+parser.add('--max-y', default=100000, type=float, help='maximum value to include')
 parser.add('--min-y', default=-1, type=float, help='minimum value to include')
+parser.add('--list-keys', '-l', default=0, type=int, help='show keys stored in log')
 
 
 args = parser.parse_args()
@@ -101,13 +94,21 @@ for fname in args.files:
     # rescale iterations by batch size
     for entry in hist[exp_name]:
         entry['it'] *= batch_size
+    if args.list_keys > 0:
+        keys = list_log_keys(hist[exp_name])
+        print 'keys in file %s (experiment "%s"):' % (fname, exp_name)
+        for k in keys:
+            print '    %s' % k
+
+if args.list_keys > 0:
+    sys.exit(0)
 
 # sanity check for what_dict
 for k in what_dict:
     found = False
     for exp_name in hist:
         try:
-            h = get_history_log(what_dict[k][0], hist[exp_name])
+            h = get_log(what_dict[k][0], hist[exp_name])
             if len(h[0]) > 0:
                 found = True
                 break
@@ -128,7 +129,7 @@ c = 0
 for exp_name in hist:
     for k in args.what:
         try:
-            h = get_history_log(what_dict[k][0], hist[exp_name])
+            h = get_log(what_dict[k][0], hist[exp_name])
             n = min(5, len(h[0]))
             m = moving_average(h[0], n)
             best = 0.0
@@ -153,10 +154,9 @@ if args.grad > 0:
     for exp_name in hist:
 
         try:
-            v, i = filter_hist(
-                get_history_log(
-                    'running_grad', hist[exp_name]), args.min_iter, args.max_iter, args.min_y, args.max_y)
-            ax[1].plot(i, v, colors[c], label='running_grad ' + exp_name)
+            v, i = filter_hist(get_log(
+                    'train_avg_grad', hist[exp_name]), args.min_iter, args.max_iter, args.min_y, args.max_y)
+            ax[1].plot(i, v, colors[c], label='grad ' + exp_name)
             c = (c + 1) % len(colors)
         except BaseException:
             pass

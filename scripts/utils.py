@@ -14,6 +14,18 @@ from PIL import Image
 
 from skimage.morphology import label
 
+import torch
+
+
+def as_py_scalar(x):
+    if isinstance(x, torch.autograd.Variable):
+        x = x.data
+    if isinstance(x, torch.Tensor):
+        x = x.cpu().numpy()
+    if isinstance(x, np.ndarray):
+        x = x.item()
+    return x
+
 
 def adjust_learning_rate(optimizer, lr):
     for param_group in optimizer.param_groups:
@@ -52,46 +64,58 @@ def exceptions_str():
         sys.exc_info()[0], sys.exc_info()[1])[0].strip()
 
 
+LOG = []
+
 def clear_log():
     global LOG
     LOG = []
 
 
-def get_log():
+def get_the_log():
     global LOG
     return LOG
 
 
-def set_log(l):
+def set_the_log(l):
     global LOG
     LOG = l
 
 
-def insert_log(it, k, v):
-    global LOG
+def insert_log(it, k, v, log=None):
     #logging.info('INSERT %s %s %s %s' % (it, k, v, type(v)))
-    if len(LOG) > 0:
-        last = LOG[-1]
+
+    global LOG
+    if log is None:
+        if LOG is None:
+            LOG = []
+        log = LOG
+
+    v = as_py_scalar(v)
+
+    if len(log) > 0:
+        last = log[-1]
         if last['it'] > it:
-            msg = 'trying to change history at %d, current is %d' % (
-                it, last['it'])
+            msg = 'trying to change history at %d, current is %d' % (it, last['it'])
             logging.error(msg)
             # raise ValueError('trying to change history at %d, current is %d' % (it, last['it']))
             return
         if last['it'] != it:
             last = {'it': it}
-            LOG.append(last)
+            log.append(last)
     else:
         last = {'it': it}
-        LOG = [last]
+        log.append(last)
     last[k] = v
 
 
-def get_latest_log(what, default=None):
+def get_latest_log(what, default=None, log=None):
     global LOG
+    if log is None:
+        log = LOG
+
     latest_row = []
     latest_it = -1
-    for row in LOG[::-1]:
+    for row in log[::-1]:
         if row['it'] > latest_it and what in row:
             latest_it = row['it']
             latest_row = row
@@ -106,13 +130,23 @@ def get_latest_log(what, default=None):
     return latest_row[what], latest_it
 
 
-def get_history_log(what, log=None):
+def get_log(what, log=None):
     global LOG
-    if not log:
+    if log is None:
         log = LOG
     vals = [x[what] for x in log if what in x]
     its = [x['it'] for x in log if what in x]
     return vals, its
+
+
+def list_log_keys(log=None):
+    global LOG
+    if log is None:
+        log = LOG
+    keys = set()
+    for entry in log:
+        keys |= set(entry.keys())
+    return sorted(keys)
 
 
 def get_checkpoint_file(args, it=0):

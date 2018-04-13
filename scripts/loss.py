@@ -202,6 +202,44 @@ def diagnose_errors(labels, y_pred, threshold=.5, print_message=True):
     return p, p_loc, mean_prec, mean_rec, missed_rate, extra_rate, oseg, useg
 
 
+
+def backprop_weight(labels, pred, global_state, thresh=0.1):
+    """A version of computing instance weights for training"""
+    w = 1.0 / (labels.flatten().max() + 1.0)
+
+    if 0:
+        #img_th = parametric_pipeline(pred, circle_size=4)
+        thresh = 0.5
+        img_th = (pred > -0.1).astype(int)
+        img_l = scipy.ndimage.label(img_th)[0]
+        union, intersection, area_true, area_pred = union_intersection(
+            labels, img_l)
+
+        # Compute the intersection over union
+        iou = intersection.astype(float) / union
+
+        tp, fp, fn, matches_by_pred, matches_by_target = precision_at(
+            iou, thresh)
+
+        w = 1.0
+
+        denom = 1.0 * (tp + fp + fn)
+
+        if tp + fn == 0.0:
+            w = 0.0
+
+        if denom > 0.0:
+            w = 1.0 / denom
+
+    # normalize with running average
+
+    w_norm = w / (global_state['bp_wt_sum'] / global_state['bp_wt_cnt'])
+
+    global_state['bp_wt_sum'] += w
+    global_state['bp_wt_cnt'] += 1
+
+    return w_norm
+
 #####
 
 class DiceLoss(nn.Module):

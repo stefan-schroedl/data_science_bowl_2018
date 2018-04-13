@@ -22,11 +22,22 @@ import cv2
 
 from tqdm import tqdm
 
-from img_proc import numpy_to_torch, binarize, noop_augmentation, nuc_augmentation, affine_augmentation, color_augmentation, preprocess_img, preprocess_mask
+from img_proc import numpy_img_to_torch, binarize, noop_augmentation, nuc_augmentation, affine_augmentation, color_augmentation, preprocess_img, preprocess_mask
 
 
 class NucleusDataset(Dataset):
-    """Dataset for the 2018 Data Science Bowl."""
+    """
+    Dataset for the 2018 Data Science Bowl.
+
+    usage:
+    ds = NucleusDataset(...)
+    train_ds, valid_ds = ds.train_test_split(...)
+    train_ds.preprocess() # depends on dset_type
+    train_ds.return_fields = (...)
+    ...
+    train_loader = DataLoader(train_ds, ...)
+    ...
+    """
 
     @staticmethod
     def read_and_stack(in_img_list):
@@ -77,16 +88,6 @@ class NucleusDataset(Dataset):
         # for debugging, add row index to return_fields. then you can retrieve
         # anything from the row in the caller.
 
-        if self.dset_type == 'train':
-            self.return_fields = [
-                'images_prep',
-                'masks_prep',
-                'masks_prep_bin',
-                'inst_wt']
-        elif self.dset_type == 'valid':
-            self.return_fields = ['images_prep', 'masks', 'masks_bin']
-        else:
-            self.return_fields = ['images_prep']
 
     def preprocess(self):
 
@@ -99,16 +100,12 @@ class NucleusDataset(Dataset):
 
         for i in tqdm(range(len(self.data_df)), desc='prep ' + self.dset_type):
 
-            # training images and masks can be resized, but validation and test
-            # cannot
-            w = 512 if self.dset_type == 'train' else None
-
             img = self.data_df['images'].iloc[i]
-            imgs_prep.append(preprocess_img(img, w, w))
+            imgs_prep.append(preprocess_img(img, self.dset_type))
 
             if (self.dset_type != 'test'):
                 m = self.data_df['masks'].iloc[i]
-                prep = preprocess_mask(m, w, w)
+                prep = preprocess_mask(m, self.dset_type)
 
                 masks_prep.append(prep)
                 masks_bin.append(binarize(m))
@@ -132,12 +129,7 @@ class NucleusDataset(Dataset):
 
         self.is_preprocessed = True
 
-    def __init__(
-            self,
-            root_dir=None,
-            stage_name=None,
-            group_name=None,
-            dset_type='train'):
+    def __init__(self, root_dir=None, stage_name=None, group_name=None, dset_type='train'):
         """
         Args:
             root_dir (string): Directory with all the images.
@@ -150,13 +142,7 @@ class NucleusDataset(Dataset):
         if root_dir is None:
             return
 
-        p = os.path.join(
-            root_dir,
-            stage_name +
-            '_*',
-            '*',
-            '*',
-            '*')
+        p = os.path.join(root_dir, stage_name + '_*', '*', '*', '*')
         all_images = glob(p)
         if len(all_images) == 0:
             print "Failed to find any images :( [%s]" % p
@@ -221,7 +207,7 @@ class NucleusDataset(Dataset):
                 if len(
                         img.shape) == 3 and img.shape[2] == 3:  # exclude the mask from color transformations
                     img = trans_det_color.augment_image(img)
-                return numpy_to_torch(trans_det.augment_image(img))
+                return numpy_img_to_torch(trans_det.augment_image(img))
             else:
                 # if you want to return something else than an image
                 return img
@@ -232,6 +218,9 @@ class NucleusDataset(Dataset):
 
         if not self.is_preprocessed:
             raise ValueError('data has not been preprocessed yet')
+
+        if not hasattr(self, 'return_fields'):
+            raise ValueError('return_fields has to be set before calling __getitem__')
 
         row = self.data_df.iloc[idx].to_dict()
         # for debugging:
