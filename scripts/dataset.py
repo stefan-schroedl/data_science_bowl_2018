@@ -26,18 +26,23 @@ from img_proc import numpy_img_to_torch, binarize, noop_augmentation, nuc_augmen
 
 
 class NucleusDataset(Dataset):
+
     """
     Dataset for the 2018 Data Science Bowl.
 
-    usage:
+    usage pattern:
     ds = NucleusDataset(...)
     train_ds, valid_ds = ds.train_test_split(...)
     train_ds.preprocess() # depends on dset_type
     train_ds.return_fields = (...)
+    valid_ds ...
     ...
     train_loader = DataLoader(train_ds, ...)
     ...
+    for it, row in enumerate(train_loader):
+
     """
+
 
     @staticmethod
     def read_and_stack(in_img_list):
@@ -49,6 +54,7 @@ class NucleusDataset(Dataset):
         #r = r / r.max()
         # return r
 
+
     @staticmethod
     def read_image(in_img_list):
         #img = img_as_float(rgb2hsv(rgba2rgb(io.imread(in_img_list[0]))))
@@ -57,9 +63,12 @@ class NucleusDataset(Dataset):
         img = Image.open(in_img_list[0])
         return np.array(img.convert('RGB')), img.size
 
+
     @property
     def dset_type(self):
+        """The dataset type determines preprocessing and augmentation"""
         return self._dset_type
+
 
     @dset_type.setter
     def dset_type(self, value):
@@ -78,61 +87,19 @@ class NucleusDataset(Dataset):
             self.augment = noop_augmentation()
             self.augment_color = noop_augmentation()
 
-        # NOTE on returning more than 2 items:
-        # conveniently, the dataloader actually collates dictionaries with arbitrarily many keys,
-        # as long as all items with the same key have the same dimensions. Therefore, if we want to
-        # test the original images in validation, without resizing, validation batch size has to be 1.
-        # as a workaround to get unevenly sized data, we can return the row
-        # index to retrieve it in the caller.
-
-        # for debugging, add row index to return_fields. then you can retrieve
-        # anything from the row in the caller.
-
-
-    def preprocess(self):
-
-        imgs_prep = []      # preprocessed input images
-        masks_bin = []      # binarized masks
-        masks_prep = []     # preprocesed masks
-        masks_prep_bin = []  # binarized preprocessed masks
-        # instance weights, 1 / (#nuclei + 1), used as instance weight
-        inst_wt = []
-
-        for i in tqdm(range(len(self.data_df)), desc='prep ' + self.dset_type):
-
-            img = self.data_df['images'].iloc[i]
-            imgs_prep.append(preprocess_img(img, self.dset_type))
-
-            if (self.dset_type != 'test'):
-                m = self.data_df['masks'].iloc[i]
-                prep = preprocess_mask(m, self.dset_type)
-
-                masks_prep.append(prep)
-                masks_bin.append(binarize(m))
-                masks_prep_bin.append(binarize(prep))
-                inst_wt.append(1.0 / (m.flatten().max() + 1.0))
-
-        # for some reason, the following (which is recommended) gives an error:
-        # self.data_df.loc[:, 'imgs_prep'] = imgs_prep
-        # the following "only" gives a warning:
-        self.data_df['images_prep'] = imgs_prep
-        if masks_bin:
-            self.data_df['masks_bin'] = masks_bin
-        if masks_prep:
-            self.data_df['masks_prep'] = masks_prep
-        if masks_prep_bin:
-            self.data_df['masks_prep_bin'] = masks_prep_bin
-        if inst_wt:
-            # normalize!
-            inst_wt = inst_wt / np.mean(inst_wt)
-            self.data_df['inst_wt'] = inst_wt
-
-        self.is_preprocessed = True
 
     def __init__(self, root_dir=None, stage_name=None, group_name=None, dset_type='train'):
         """
-        Args:
-            root_dir (string): Directory with all the images.
+        Read all images and masks into memory.
+
+        directory structure is assumed to be:
+            <root>/<stage>_<train/test>/{images,masks}/*png
+
+        args:
+            root_dir (string): directory with all the images.
+            stage_name (string): stage of data
+            group_name (string): typically 'train' or 'test'. No masks are available for 'test'.
+            dset_type: dataset mode, either 'train', 'valid', or 'test'.
         """
 
         self.root_dir = root_dir
@@ -145,8 +112,7 @@ class NucleusDataset(Dataset):
         p = os.path.join(root_dir, stage_name + '_*', '*', '*', '*')
         all_images = glob(p)
         if len(all_images) == 0:
-            print "Failed to find any images :( [%s]" % p
-            sys.exit(1)
+            raise ValueError("Failed to find any images :( [%s]" % p)
         img_df = pd.DataFrame({'path': all_images})
 
         def img_id(in_path): return in_path.split('/')[-3]
@@ -181,7 +147,6 @@ class NucleusDataset(Dataset):
 
         logging.debug('reading images')
         ret = data_df['images'].map(self.read_image)
-        #(data_df['images'], data_df['format'], data_df['mode'], data_df['size']) = ([x[i] for x in ret] for i in range(4))
         (data_df['images'], data_df['size']) = (
             [x[i] for x in ret] for i in range(2))
 
@@ -192,10 +157,49 @@ class NucleusDataset(Dataset):
                     lambda x: x.astype(np.uint8))
 
         self.data_df = data_df
+
         logging.debug('done reading data')
 
-    def __len__(self):
-        return self.data_df.shape[0]
+
+    def preprocess(self):
+
+        imgs_prep = []      # preprocessed input images
+        masks_bin = []      # binarized masks
+        masks_prep = []     # preprocesed masks
+        masks_prep_bin = [] # binarized preprocessed masks
+        inst_wt = []        # instance weights, 1 / (#nuclei + 1), used as instance weight
+
+        for i in tqdm(range(len(self.data_df)), desc='prep ' + self.dset_type):
+
+            img = self.data_df['images'].iloc[i]
+            imgs_prep.append(preprocess_img(img, self.dset_type))
+
+            if (self.dset_type != 'test'):
+                m = self.data_df['masks'].iloc[i]
+                prep = preprocess_mask(m, self.dset_type)
+
+                masks_prep.append(prep)
+                masks_bin.append(binarize(m))
+                masks_prep_bin.append(binarize(prep))
+                inst_wt.append(1.0 / (m.flatten().max() + 1.0))
+
+        # for some reason, the following (which is recommended) gives an error:
+        # self.data_df.loc[:, 'imgs_prep'] = imgs_prep
+        # the following "only" gives a warning:
+        self.data_df['images_prep'] = imgs_prep
+        if masks_bin:
+            self.data_df['masks_bin'] = masks_bin
+        if masks_prep:
+            self.data_df['masks_prep'] = masks_prep
+        if masks_prep_bin:
+            self.data_df['masks_prep_bin'] = masks_prep_bin
+        if inst_wt:
+            # normalize!
+            inst_wt = inst_wt / np.mean(inst_wt)
+            self.data_df['inst_wt'] = inst_wt
+
+        self.is_preprocessed = True
+
 
     def apply_augment(self, cols):
         trans_det = self.augment.to_deterministic()
@@ -214,7 +218,22 @@ class NucleusDataset(Dataset):
 
         return dict([(k, trans_if_img(img)) for k, img in cols.items()])
 
+
+    def __len__(self):
+        return self.data_df.shape[0]
+
+
     def __getitem__(self, idx):
+
+        # NOTE on returning more than 2 items (train and test image):
+        # conveniently, the dataloader actually collates dictionaries with arbitrarily many keys,
+        # as long as all items with the same key have the same dimensions. Therefore, if we want to
+        # test the original images in validation, without resizing, validation batch size has to be 1.
+        # as a workaround to get unevenly sized data, we can return the row
+        # index to retrieve it in the caller.
+
+        # for debugging, add row index to return_fields. then you can retrieve
+        # anything from the row in the caller.
 
         if not self.is_preprocessed:
             raise ValueError('data has not been preprocessed yet')
@@ -223,21 +242,31 @@ class NucleusDataset(Dataset):
             raise ValueError('return_fields has to be set before calling __getitem__')
 
         row = self.data_df.iloc[idx].to_dict()
-        # for debugging:
-        # row['idx'] = idx
         return self.apply_augment(
             dict([(k, row[k]) for k in self.return_fields]))
 
-    def train_test_split(self, **options):
-        """ Return a list of splitted indices from a DataSet.
-        Indices can be used with DataLoader to build a train and validation set.
 
-        Arguments:
-            A Dataset
-            A test_size, as a float between 0 and 1 (percentage split) or as an int (fixed number split)
-            Shuffling True or False
-            Random seed
+    def train_test_split(self, **options):
+        """ Return splitted train and validation datasets.
+        options are passed to sklearn.model_selection.train_test_split, see there.
         """
+
+        if 'stratify' in options:
+            if options['stratify'] == False:
+                del options['stratify']
+            else:
+                # stratify by image size.
+                # NOTE: image sizes that occur only once will not be stratifiable, remove
+                grouped = self.data_df.groupby('size', sort=False)
+                to_delete = []
+                for group in grouped:
+                    if len(group[1]) <= 1:
+                        to_delete.append(group[0])
+                for sz in to_delete:
+                    logging.warn('img size {} only occurs once, deleting due to stratification'.format(sz))
+                    self.data_df = self.data_df[self.data_df['size'] != sz]
+
+                options['stratify'] = self.data_df['images'].map(lambda x: '{}'.format(x.size))
 
         df_train, df_valid = train_test_split_sk(self.data_df, **options)
         dset_train = NucleusDataset(dset_type='train')

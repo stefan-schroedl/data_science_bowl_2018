@@ -528,15 +528,12 @@ def train_cnn(train_loader,
                 save_checkpoint(
                     get_checkpoint_file(global_state['args']), model, optimizer, global_state, is_best)
 
-        print stats_train
         for k,v in stats_train.items():
             insert_log(it, 'train_last_%s' % k, v.last)
 
     time_end = time.time()
     time_total = time_end - time_start
     stats_train.update('time', time_total)
-
-    assert(it == global_state['it'])
 
     for k,v in stats_train.items():
         insert_log(it, 'train_avg_%s' % k, v.avg)
@@ -848,18 +845,10 @@ def main():
             args.data,
             stage_name=args.stage,
             group_name=args.group,
-            dset_type = dset_type)
+            dset_type=dset_type)
     timer = timeit.Timer(load_data)
     t, dset = timer.timeit(number=1)
     logging.info('load time: %.1f\n' % t)
-
-    stratify = None
-    if args.stratify > 0:
-        # hack: this image format (1388, 1040) occurs only once, stratify
-        # complains ..
-        dset.data_df = dset.data_df[dset.data_df['size'] != (1388, 1040)]
-
-        stratify = dset.data_df['images'].map(lambda x: '{}'.format(x.size))
 
     # which fields should the dataset return?
     fields_test = [args.input_field]
@@ -929,7 +918,7 @@ def main():
         batch_size_train = 1
     batch_size_valid = 1
     train_dset, valid_dset = dset.train_test_split(
-        test_size=args.valid_fraction, random_state=args.random_seed, shuffle=True, stratify=stratify)
+        test_size=args.valid_fraction, random_state=args.random_seed, shuffle=True, stratify=(args.stratify>0))
 
     if args.do in ('score', 'baseline'):
         train_dset.dset_type = 'valid'
