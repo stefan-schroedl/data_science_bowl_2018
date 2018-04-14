@@ -376,9 +376,14 @@ def make_submission(dset, model, args, pred_field_iou='seg'):
             ax[0].title.set_fontsize(100)
             ax[0].imshow(img)
             for j,(name,pred_part) in enumerate(pred.items()):
-                ax[j+1].title.set_text(name)
+                mi = pred_part.data.min()
+                ma = pred_part.data.max()
+                me = pred_part.data.mean()
+
+                pred_part = torch_img_to_numpy(pred_part)
+                ax[j+1].title.set_text('%s [%.3g %.3g %.3g]' % (name, mi, me, ma))
                 ax[j+1].title.set_fontsize(100)
-                ax[j+1].imshow(torch_img_to_numpy(pred_part))
+                ax[j+1].imshow(pred_part)
                 fig.savefig(
                     os.path.join(args.out_dir, 'img_%s.%d.png' % (args.experiment, i)))
             plt.close()
@@ -714,7 +719,7 @@ def main():
     parser.add('--experiment', '-e', required=True, help='experiment name')
     parser.add('--out-dir', '-o', help='output directory')
     parser.add('--resume', type=str, metavar='PATH', help='path to latest checkpoint')
-    parser.add( '--override-model-opts', type=csv_list, default='override-model-opts,resume,experiment,out-dir,save-every,print-every,eval-every,scheduler,log-file,do', help='when resuming, change these options [default: %(default)s]')
+    parser.add( '--override-model-opts', type=csv_list, default='override-model-opts,resume,experiment,out-dir,save-every,print-every,eval-every,scheduler,log-file,do,stop-instance-after', help='when resuming, change these options [default: %(default)s]')
     parser.add('--force-overwrite', type=int, default=0, help='overwrite existing checkpoint, if it exists [default: %(default)s]')
     parser.add( '--do', choices=('train','score','submit','baseline'), default='train', help='mode of operation. score: compute losses and iou over training and validation sets. submit: write output files with run-length encoded predictions. baseline: compute losses with global average as prediction [default: %(default)s]')
     parser.add( '--predictions-file', type=str, help='file name for predictions output')
