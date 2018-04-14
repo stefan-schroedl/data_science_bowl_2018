@@ -1,3 +1,4 @@
+import shutil
 from nuc_trans  import random_rotate90_transform2
 from architectures import UNetClassify
 import numpy as np
@@ -8,7 +9,7 @@ import random
 import os
 import sys
 import torch.optim as optim
-
+from mnet import MNET
 import torch.nn.functional as F
 import torch.nn as nn
 
@@ -24,6 +25,13 @@ if pred_ty not in ['superbounds','bounds']:
 
 test_d={}
 train_d={}
+
+def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
+    torch.save(state, filename)
+    if is_best:
+        shutil.copyfile(filename, 'model_best.pth.tar')
+
+
 
 def load_dataset(dir):
     for root, dirs, files in os.walk(dir):
@@ -45,7 +53,8 @@ def n2t(im):
 
 def t2n(im):
 	n=im.cpu().data.numpy()
-	n[n<0]=0
+	n-=n.min()
+	#n[n<0]=0
 	div=255.0/max(1.0,n.max())
 	return (np.transpose(n,(1,2,0))*div).astype(np.uint8)
 
@@ -72,8 +81,8 @@ def dilate(im):
 
 d=load_dataset(data_dir)
 
-model = UNetClassify(layers=4, init_filters=16)
-
+model = UNetClassify(layers=4, init_filters=32)
+#model = MNET()
 
 cuda=True
 if cuda:
@@ -83,15 +92,16 @@ if cuda:
 #print im_torch.size()
 #out=model.forward(im_torch)
 #print out.size()
-criterion=nn.BCELoss()
+#criterion=nn.BCELoss()
 #criterion=nn.MSELoss()
-#criterion=nn.BCEWithLogitsLoss()
-#optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-batch_size=8
+criterion=nn.BCEWithLogitsLoss()
+optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+#optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+batch_size=8# 32
 model.train()
 it=0
-for batch_id in xrange(10000):
+bit=0
+for batch_id in xrange(1000000):
     optimizer.zero_grad()
     mini_loss=0
     for img_id in xrange(batch_size):
@@ -116,8 +126,16 @@ for batch_id in xrange(10000):
 	im_in_np=t2n(im_in[0])
 	im_out_np=t2n(im_out[0])
 	im_pred_np=t2n(output[0])
-	cv2.imwrite('out%d.png' % (it%10),np.concatenate((im_pred_np,im_out_np),axis=1))
+        if it%100==0:
+		cv2.imwrite('out%d.png' % (it%10),np.concatenate((im_pred_np,im_out_np),axis=1))
 	#cv2.waitKey(20)
+    bit+=1
+    if bit%100==1:
+        save_checkpoint({
+            'epoch': bit + 1,
+            'state_dict': model.state_dict(),
+            'optimizer' : optimizer.state_dict(),
+        }, True)
     loss.backward()
     print mini_loss
     optimizer.step()
