@@ -22,7 +22,7 @@ import cv2
 
 from tqdm import tqdm
 
-from img_proc import numpy_img_to_torch, binarize, noop_augmentation, nuc_augmentation, affine_augmentation, color_augmentation, preprocess_img, preprocess_mask
+from img_proc import numpy_img_to_torch, binarize, noop_augmentation, nuc_augmentation, affine_augmentation, color_augmentation, preprocess_img, preprocess_mask, get_contour
 
 
 class NucleusDataset(Dataset):
@@ -167,6 +167,7 @@ class NucleusDataset(Dataset):
         masks_bin = []      # binarized masks
         masks_prep = []     # preprocesed masks
         masks_prep_bin = [] # binarized preprocessed masks
+        contours = []       # contours on the eroded mask for multi-task
         inst_wt = []        # instance weights, 1 / (#nuclei + 1), used as instance weight
 
         for i in tqdm(range(len(self.data_df)), desc='prep ' + self.dset_type):
@@ -180,7 +181,10 @@ class NucleusDataset(Dataset):
 
                 masks_prep.append(prep)
                 masks_bin.append(binarize(m))
-                masks_prep_bin.append(binarize(prep))
+                prep_bin = binarize(prep)
+                masks_prep_bin.append(prep_bin)
+                contours.append(get_contour(prep_bin))
+
                 inst_wt.append(1.0 / (m.flatten().max() + 1.0))
 
         # for some reason, the following (which is recommended) gives an error:
@@ -193,6 +197,9 @@ class NucleusDataset(Dataset):
             self.data_df['masks_prep'] = masks_prep
         if masks_prep_bin:
             self.data_df['masks_prep_bin'] = masks_prep_bin
+        if contours:
+            self.data_df['contours'] = contours
+
         if inst_wt:
             # normalize!
             inst_wt = inst_wt / np.mean(inst_wt)

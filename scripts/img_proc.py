@@ -320,6 +320,21 @@ def nuc_augmentation():
                   iaa.Crop(percent=(0.0, 0.25), keep_size=False))])
 
 
+def get_contour(img):
+    img_contour = np.zeros_like(img).astype(np.uint8)
+    contours = skimage.measure.find_contours(img, 0) # outside contour
+    for contour in contours:
+        contour = contour.astype(np.uint8)
+        img_contour[contour[:,0], contour[:,1]] = 1
+    return img_contour
+
+#def get_contour(img):
+#    img_contour = np.zeros_like(img).astype(np.uint8)
+#    _, contours, hierarchy = cv2.findContours(img.astype(np.uint8), cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+#    cv2.drawContours(img_contour, contours, -1, (255, 255, 255), 4)
+#    return img_contour
+
+
 ########
 # from https://github.com/neptune-ml/open-solution-data-science-bowl-2018/wiki
 

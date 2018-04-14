@@ -328,3 +328,29 @@ class UNetClassify(UNet):
         # Note that we don't perform the sigmoid here.
         return self.output_layer(x)
 
+
+class UNetClassifyMulti(UNet):
+    def __init__(self, targets, *args, **kwargs):
+        init_val = kwargs.pop('init_val', 0.5)
+        super(UNetClassifyMulti, self).__init__(*args, **kwargs)
+        self.output_layers = {}
+        for target in targets:
+            self.output_layers[target['name']] = nn.Conv2d(self.init_filters, 1, (3, 3), padding=1)
+
+        for name, param in self.named_parameters():
+            typ = name.split('.')[-1]
+            if typ == 'bias':
+                if 'output_layer' in name:
+                    # Init so that the average will end up being init_val
+                    param.data.fill_(-math.log((1-init_val)/init_val))
+                else:
+                    param.data.zero_()
+
+    def forward(self, x):
+        x = super(UNetClassifyMulti, self).forward(x)
+        # Note that we don't perform the sigmoid here.
+        pred = {}
+        for k,v in self.output_layers.items():
+            pred[k] = v(x)
+        return pred
+

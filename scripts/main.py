@@ -39,7 +39,7 @@ from KNN import *
 
 from dataset import NucleusDataset
 
-from architectures import CNN, UNetClassify, init_weights
+from architectures import CNN, UNetClassify, UNetClassifyMulti, init_weights
 
 import loss
 from loss import iou_metric, union_intersection, precision_at
@@ -278,6 +278,8 @@ def apply_criteria(data_row,
         criterion = target_spec['crit']
         target = Variable(dev(data_row[target_spec['col']]), requires_grad=False)
 
+        if not name in pred:
+            raise ValueError('model did not predict configured target "%s"' % name)
         l = criterion(pred[name], target)
         losses[name] = l
         meter.update(name, as_py_scalar(l))
@@ -346,6 +348,53 @@ def validate(
 
     time_end = time.time()
     stats.update('time', time_end - time_start)
+
+
+def make_submission(dset, model, args, pred_field_iou='seg'):
+
+    dset.preprocess()
+    model.eval()
+
+    preds = []
+    for i in tqdm(range(len(dset.data_df))):
+        img = dset.data_df[args.input_field].iloc[i]
+        pred = model(
+            Variable(dev(numpy_img_to_torch(img, True)), volatile=True))
+
+        pred_l, pred = postprocess_prediction(
+            pred[pred_field_iou], 'test', max_clusters_for_dilation=1e20)  # highest precision
+        preds.append(pred_l)
+
+        if 1:
+            fig, ax = plt.subplots(1, 3, figsize=(50, 50))
+            plt.tight_layout()
+            ax[0].imshow(img)
+            ax[1].imshow(pred)
+            ax[2].imshow(pred_l)
+            fig.savefig(
+                os.path.join(
+                    args.out_dir, 'img_%s.%d.png' %
+                    (args.experiment, i)))
+            plt.close()
+
+    dset.data_df['pred'] = preds
+
+    dset.data_df['rles'] = dset.data_df['pred'].map(
+        lambda x: list(labels_to_rles(x)))
+
+    out_pred_list = []
+    for _, c_row in tqdm(dset.data_df.iterrows()):
+        for c_rle in c_row['rles']:
+            out_pred_list.append({'ImageId': c_row['id'],
+                                  'EncodedPixels': ' '.join(np.array(c_rle).astype(str))})
+
+    out_pred_df = pd.DataFrame(out_pred_list)
+    msg = '%d regions found for %d images; writing predictions to %s' % (
+        out_pred_df.shape[0], dset.data_df.shape[0], args.predictions_file)
+    logging.info(msg)
+    print msg
+    out_pred_df[['ImageId', 'EncodedPixels']].to_csv(
+        args.predictions_file, index=False)
 
 
 def train_knn(
@@ -593,6 +642,59 @@ def epoch_logging_message(global_state, targets, stats_train, stats_valid, len_t
     return msg
 
 
+def init_cuda():
+    if not torch.cuda.is_available():
+        raise ValueError('cuda requested, but not available')
+
+    # uses the inbuilt cudnn auto-tuner to find the fastest convolution algorithms.
+    # note: actually makes it a lot slower on this problem!
+    torch.backends.cudnn.benchmark = (args.cuda_benchmark > 0)
+    torch.backends.cudnn.enabled = True
+
+    global dev
+    def dev(x): return x.cuda()
+
+    print '\tset cuda environment'
+    print '\t\ttorch.__version__              =', torch.__version__
+    print '\t\ttorch.version.cuda             =', torch.version.cuda
+    print '\t\ttorch.backends.cudnn.version() =', torch.backends.cudnn.version()
+    try:
+        NUM_CUDA_DEVICES = len(
+            os.environ['CUDA_VISIBLE_DEVICES'].split(','))
+        print '\t\tos[\'CUDA_VISIBLE_DEVICES\']  =', os.environ['CUDA_VISIBLE_DEVICES']
+    except Exception:
+        print '\t\tos[\'CUDA_VISIBLE_DEVICES\']  =', 'None'
+        NUM_CUDA_DEVICES = 1
+
+    print '\t\ttorch.cuda.device_count()   =', torch.cuda.device_count()
+    print '\t\ttorch.cuda.current_device() =', torch.cuda.current_device()
+
+
+def parse_targets(args):
+    targets = []
+
+    for spec in args.targets:
+        # <name>:<dataset column>:<weight>
+        parts = spec.split(':')
+        if len(parts) == 2:
+            w = 1.0
+        elif len(parts) == 3:
+            w = float(parts[2])
+        else:
+            raise ValueError('invalid target specification: %s' % spec)
+        targets.append(
+            {'name' : parts[0],
+             'col' : parts[1],
+             'crit' : make_criterion(args),
+             'w' : w})
+
+        # normalize weights
+        s = float(sum([target['w'] for target in targets]))
+        for target in targets:
+            target['w'] /= s
+
+    return targets
+
 def main():
     parser = configargparse.ArgumentParser( description='training and testing of NN model.')
     parser.add( '--config', '-c', default='default.cfg', is_config_file=True, help='config file path [default: %(default)s])')
@@ -680,32 +782,6 @@ def main():
         args.predictions_file = os.path.join(
             args.out_dir, 'predictions_%s.csv' %
             args.experiment)
-    if args.cuda > 0:
-        if not torch.cuda.is_available():
-            raise ValueError('cuda requested, but not available')
-
-        # uses the inbuilt cudnn auto-tuner to find the fastest convolution algorithms.
-        # note: actually makes it a lot slower on this problem!
-        torch.backends.cudnn.benchmark = (args.cuda_benchmark > 0)
-        torch.backends.cudnn.enabled = True
-        global dev
-
-        def dev(x): return x.cuda()
-
-        print '\tset cuda environment'
-        print '\t\ttorch.__version__              =', torch.__version__
-        print '\t\ttorch.version.cuda             =', torch.version.cuda
-        print '\t\ttorch.backends.cudnn.version() =', torch.backends.cudnn.version()
-        try:
-            NUM_CUDA_DEVICES = len(
-                os.environ['CUDA_VISIBLE_DEVICES'].split(','))
-            print '\t\tos[\'CUDA_VISIBLE_DEVICES\']  =', os.environ['CUDA_VISIBLE_DEVICES']
-        except Exception:
-            print '\t\tos[\'CUDA_VISIBLE_DEVICES\']  =', 'None'
-            NUM_CUDA_DEVICES = 1
-
-        print '\t\ttorch.cuda.device_count()   =', torch.cuda.device_count()
-        print '\t\ttorch.cuda.current_device() =', torch.cuda.current_device()
 
     if args.random_seed is not None:
         np.random.seed(args.random_seed)
@@ -721,6 +797,15 @@ def main():
                     'lr': args.lr,
                     'args': args}
 
+    # parse target(s)
+
+    targets = parse_targets(args)
+
+    # init cuda
+
+    if args.cuda > 0:
+        init_cuda()
+
     # create model
 
     trainer = None
@@ -732,8 +817,8 @@ def main():
 
     elif args.model == 'cnn':
         trainer = train_cnn
-        model = CNN(32)
-        #model = UNetClassify(layers=4, init_filters=16)
+        #model = CNN(32)
+        model = UNetClassifyMulti(targets, layers=4, init_filters=16)
         if args.weight_init != 'default':
             init_weights(model, args.weight_init)
         model = dev(model)
@@ -767,7 +852,9 @@ def main():
     logging.info('number of parameters: %d\n' %
                  sum([param.nelement() for param in model.parameters()]))
 
+
     # set up optimizer
+
     if args.optim == 'adam':
         optimizer = optim.Adam(model.parameters(), args.lr,
                                weight_decay=args.weight_decay)
@@ -784,7 +871,9 @@ def main():
     else:
         raise ValueError('unknown optimization: %s' % args.optim)
 
+
     # set up learn rate scheduler
+
     scheduler = None
     if args.scheduler == 'plateau':
         scheduler = ReduceLROnPlateau2(
@@ -806,41 +895,16 @@ def main():
         scheduler = LambdaLR(optimizer, lr_lambda=lambda epoch: args.lr_decay)
 
 
-    # parse target(s)
+    # load data
 
-    targets = []
-
-    for spec in args.targets:
-        # <name>:<dataset column>:<weight>
-        parts = spec.split(':')
-        if len(parts) == 2:
-            w = 1.0
-        elif len(parts) == 3:
-            w = float(parts[2])
-        else:
-            raise ValueError('invalid target specification: %s' % spec)
-        targets.append(
-            {'name' : parts[0],
-             'col' : parts[1],
-             'crit' : make_criterion(args),
-             'w' : w})
-
-        # normalize weights
-        s = float(sum([target['w'] for target in targets]))
-        for target in targets:
-            target['w'] /= s
-
-
-    # data loading
+    if args.do == 'train':
+        dset_type = 'train'
+    elif args.do == 'submit':
+        dset_type = 'test'
+    else:
+        dset_type = 'valid'
 
     def load_data():
-
-        if args.do == 'train':
-            dset_type = 'train'
-        elif args.do == 'submit':
-            dset_type = 'test'
-        else:
-            dset_type = 'valid'
         return NucleusDataset(
             args.data,
             stage_name=args.stage,
@@ -850,7 +914,9 @@ def main():
     t, dset = timer.timeit(number=1)
     logging.info('load time: %.1f\n' % t)
 
-    # which fields should the dataset return?
+
+    # which fields should the data loader return?
+
     fields_test = [args.input_field]
     fields_valid = [args.input_field]
     for target in targets:
@@ -861,52 +927,10 @@ def main():
     if args.instance_weights is not None:
         fields_train.append(args.instance_weights)
 
+    # make submission file
+
     if args.do == 'submit':
-
-        dset.preprocess()
-
-        model.eval()
-
-        preds = []
-        for i in tqdm(range(len(dset.data_df))):
-            img = dset.data_df[args.input_field].iloc[i]
-            pred = model(
-                Variable(dev(numpy_img_to_torch(img, True)), volatile=True))
-            pred_l, pred = postprocess_prediction(
-                pred, 'test', max_clusters_for_dilation=1e20)  # highest precision
-            preds.append(pred_l)
-
-            if 1:
-                fig, ax = plt.subplots(1, 3, figsize=(50, 50))
-                plt.tight_layout()
-                ax[0].imshow(img)
-                ax[1].imshow(pred)
-                ax[2].imshow(pred_l)
-                fig.savefig(
-                    os.path.join(
-                        args.out_dir, 'img_%s.%d.png' %
-                        (args.experiment, i)))
-                plt.close()
-
-        dset.data_df['pred'] = preds
-
-        dset.data_df['rles'] = dset.data_df['pred'].map(
-            lambda x: list(labels_to_rles(x)))
-
-        out_pred_list = []
-        for _, c_row in tqdm(dset.data_df.iterrows()):
-            for c_rle in c_row['rles']:
-                out_pred_list.append({'ImageId': c_row['id'],
-                                      'EncodedPixels': ' '.join(np.array(c_rle).astype(str))})
-
-        out_pred_df = pd.DataFrame(out_pred_list)
-        msg = '%d regions found for %d images; writing predictions to %s' % (
-            out_pred_df.shape[0], dset.data_df.shape[0], args.predictions_file)
-        logging.info(msg)
-        print msg
-        out_pred_df[['ImageId', 'EncodedPixels']].to_csv(
-            args.predictions_file, index=False)
-
+        make_submission(dset, model, args)
         return
 
 
@@ -926,20 +950,13 @@ def main():
     train_dset.preprocess()
     valid_dset.preprocess()
 
-    train_loader = DataLoader(
-        train_dset,
-        batch_size=batch_size_train,
-        shuffle=True,
-        pin_memory=(
-            args.cuda > 0),
-        num_workers=args.workers)
-    valid_loader = DataLoader(
-        valid_dset,
-        batch_size=batch_size_valid,
-        shuffle=True,
-        pin_memory=(
-            args.cuda > 0),
-        num_workers=args.workers)
+    train_loader = DataLoader(train_dset, batch_size=batch_size_train, shuffle=True,
+                              pin_memory=(args.cuda > 0), num_workers=args.workers)
+    valid_loader = DataLoader( valid_dset, batch_size=batch_size_valid, shuffle=True,
+                               pin_memory=(args.cuda > 0), num_workers=args.workers)
+
+
+    # score data
 
     if args.do in ('score', 'baseline'):
 
