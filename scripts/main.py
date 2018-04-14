@@ -32,7 +32,7 @@ import cv2
 from meter import Meter, NamedMeter
 
 from img_proc import numpy_img_to_torch, torch_img_to_numpy, postprocess_prediction
-from utils import mkdir_p, csv_list, int_list, strip_end, init_logging, get_the_log, set_the_log, clear_log, list_log_keys, insert_log, get_latest_log, get_log, labels_to_rles, get_latest_checkpoint_file, get_checkpoint_file, checkpoint_file_from_dir, moving_average, as_py_scalar
+from utils import mkdir_p, csv_list, int_list, strip_end, init_logging, get_the_log, set_the_log, clear_log, list_log_keys, insert_log, get_latest_log, get_log, labels_to_rles, get_latest_checkpoint_file, get_checkpoint_file, checkpoint_file_from_dir, moving_average, as_py_scalar, stop_current_instance
 from adjust_learn_rate import get_learning_rate
 
 from KNN import *
@@ -642,13 +642,13 @@ def epoch_logging_message(global_state, targets, stats_train, stats_valid, len_t
     return msg
 
 
-def init_cuda():
+def init_cuda(benchmark):
     if not torch.cuda.is_available():
         raise ValueError('cuda requested, but not available')
 
     # uses the inbuilt cudnn auto-tuner to find the fastest convolution algorithms.
     # note: actually makes it a lot slower on this problem!
-    torch.backends.cudnn.benchmark = (args.cuda_benchmark > 0)
+    torch.backends.cudnn.benchmark = benchmark
     torch.backends.cudnn.enabled = True
 
     global dev
@@ -750,6 +750,7 @@ def main():
     parser.add('-j', '--workers', default=1, type=int, metavar='N', help='number of data loader workers [default: %(default)s]')
     parser.add('--cuda', type=int, default=0, help='use cuda [default: %(default)s]')
     parser.add( '--cuda-benchmark', type=int, default=0, help='use cuda benchmark mode [default: %(default)s]')
+    parser.add('--stop-instance-after',metavar='SEC', type=int, default=2592000, help='wen running on AWS, stop the instance after that many seconds')
 
     args = parser.parse_args()
 
@@ -797,6 +798,8 @@ def main():
                     'lr': args.lr,
                     'args': args}
 
+    time_start = time.time()
+
     # parse target(s)
 
     targets = parse_targets(args)
@@ -804,7 +807,7 @@ def main():
     # init cuda
 
     if args.cuda > 0:
-        init_cuda()
+        init_cuda(args.cuda_benchmark>0)
 
     # create model
 
@@ -818,6 +821,7 @@ def main():
     elif args.model == 'cnn':
         trainer = train_cnn
         #model = CNN(32)
+        #model = UNetClassify(layers=4, init_filters=16)
         model = UNetClassifyMulti(targets, layers=4, init_filters=16)
         if args.weight_init != 'default':
             init_weights(model, args.weight_init)
@@ -1017,6 +1021,16 @@ def main():
                 model,
                 optimizer,
                 global_state)
+
+
+            # check elapsed time
+            time_end = time.time()
+            time_total = time_end - time_start
+            logging.info('[%d, %d] total running time: %d seconds' % (global_state['epoch'], global_state['it'], time_total))
+            if time_total > args.stop_instance_after:
+                ret = stop_current_instance(False)
+                logging.info(ret)
+                return 0
 
             if global_state['args'].scheduler != 'none':
                 # note: different interface!

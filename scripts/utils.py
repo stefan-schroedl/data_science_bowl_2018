@@ -9,6 +9,8 @@ import socket
 import errno
 import pickle
 import re
+import urllib2
+import boto3
 
 from PIL import Image
 
@@ -20,8 +22,11 @@ import torch
 def as_py_scalar(x):
     if isinstance(x, torch.autograd.Variable):
         x = x.data
+    if isinstance(x, (torch.cuda.FloatTensor, torch.cuda.DoubleTensor,
+                      torch.cuda.ByteTensor, torch.cuda.IntTensor, torch.cuda.LongTensor)):
+        x = x.cpu()
     if isinstance(x, torch.Tensor):
-        x = x.cpu().numpy()
+        x = x.numpy()
     if isinstance(x, np.ndarray):
         x = x.item()
     return x
@@ -319,6 +324,21 @@ def labels_to_rles(lab_img):
     for i in range(1, lab_img.max() + 1):
         yield rle_encoding(lab_img == i)
 
+
+# Amazon stuff
+
+def get_current_instance_id():
+    return urllib2.urlopen('http://169.254.169.254/latest/meta-data/instance-id').read()
+
+
+def stop_current_instance(dry_run=True):
+    instance_id = get_current_instance_id()
+    ec2 = boto3.resource('ec2')
+    msg = 'instance shutting down'
+    print msg
+    logging.warning(msg)
+    ret = ec2.instances.filter(InstanceIds=[instance_id]).stop(DryRun=dry_run)
+    return ret
 
 if __name__ == '__main__':
     pass

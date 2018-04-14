@@ -334,8 +334,12 @@ class UNetClassifyMulti(UNet):
         init_val = kwargs.pop('init_val', 0.5)
         super(UNetClassifyMulti, self).__init__(*args, **kwargs)
         self.output_layers = {}
+        self.target_names = []
         for target in targets:
-            self.output_layers[target['name']] = nn.Conv2d(self.init_filters, 1, (3, 3), padding=1)
+            conv = nn.Conv2d(self.init_filters, 1, (3, 3), padding=1)
+            name = target['name']
+            self.target_names.append(name)
+            self.add_module(name, conv) # needed such that cuda() etc finds submodules!
 
         for name, param in self.named_parameters():
             typ = name.split('.')[-1]
@@ -350,7 +354,6 @@ class UNetClassifyMulti(UNet):
         x = super(UNetClassifyMulti, self).forward(x)
         # Note that we don't perform the sigmoid here.
         pred = {}
-        for k,v in self.output_layers.items():
-            pred[k] = v(x)
+        for n in self.target_names:
+            pred[n] = self.__getattr__(n)(x)
         return pred
-
