@@ -39,6 +39,10 @@ crit_default = ('tr:train_last_loss,min;'
                 'w:train_avg_inst_wt,mean;'
                 'ts_iou:valid_avg_iou,max;'
                 'tr_iou:train_avg_iou,max;'
+                'tr_seg:train_avg_seg,min;'
+                'ts_seg:valid_avg_seg,min;'
+                'tr_cont:train_avg_cont,min;'
+                'ts_cont:valid_avg_cont,min;'
                 'lr:lr,min;'
                 'grad:train_avg_grad,mean')
 

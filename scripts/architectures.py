@@ -2,6 +2,7 @@
 
 import math
 import logging
+from collections import OrderedDict
 
 import torch
 import torch.autograd as autograd
@@ -353,7 +354,7 @@ class UNetClassifyMulti(UNet):
     def forward(self, x):
         x = super(UNetClassifyMulti, self).forward(x)
         # Note that we don't perform the sigmoid here.
-        pred = {}
+        pred = OrderedDict()
         for n in self.target_names:
             pred[n] = self.__getattr__(n)(x)
         return pred

@@ -44,7 +44,9 @@ def is_inverted(img, invert_thresh_pd=10.0):
 
 
 def torch_img_to_numpy(t):
-    t = t.numpy().squeeze()
+    if isinstance(t, torch.autograd.Variable):
+        t = t.data
+    t = t.cpu().numpy().squeeze()
     if t.ndim > 2:
         t = t.transpose(1, 2, 0)
     t = (t / t.max() * 255).astype(np.uint8)

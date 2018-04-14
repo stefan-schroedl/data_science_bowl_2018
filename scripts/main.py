@@ -321,17 +321,21 @@ def validate(
 
     if calc_baseline:
         for i, row in enumerate(loader):
-            for target_spec in targets:
-                avg_mask.update(target_spec['col'], row[target_spec['col']].numpy().mean())
+            for target in targets:
+                avg_mask.update(target['col'], row[target['col']].numpy().mean())
+        for target in targets:
+            msg = 'avg for column "%s": %.3g' % (target['col'], avg_mask[target['col']].avg)
+            print msg
+            logging.info(msg)
 
 
     for i, row in tqdm(enumerate(loader), desc='valid', total=loader.__len__()):
 
         if calc_baseline:
             pred = {}
-            for target_spec in targets:
+            for target in targets:
                 # constant mean prediction in the same shape as the target
-                pred[target_spec['name']] = Variable(dev(torch.ones_like(row[target_spec['col']]) * avg_mask[target_spec['col']].avg),
+                pred[target['name']] = Variable(dev(torch.ones_like(row[target['col']]) * avg_mask[target['col']].avg),
                                                      volatile=True)
         else:
             pred = run_model(model, row[input_field], train=False)
@@ -361,20 +365,22 @@ def make_submission(dset, model, args, pred_field_iou='seg'):
         pred = model(
             Variable(dev(numpy_img_to_torch(img, True)), volatile=True))
 
-        pred_l, pred = postprocess_prediction(
+        pred_l, pred_seg = postprocess_prediction(
             pred[pred_field_iou], 'test', max_clusters_for_dilation=1e20)  # highest precision
         preds.append(pred_l)
 
         if 1:
-            fig, ax = plt.subplots(1, 3, figsize=(50, 50))
+            fig, ax = plt.subplots(1, len(pred)+1, figsize=(50, 50))
             plt.tight_layout()
+            ax[0].title.set_text('img')
+            ax[0].title.set_fontsize(100)
             ax[0].imshow(img)
-            ax[1].imshow(pred)
-            ax[2].imshow(pred_l)
-            fig.savefig(
-                os.path.join(
-                    args.out_dir, 'img_%s.%d.png' %
-                    (args.experiment, i)))
+            for j,(name,pred_part) in enumerate(pred.items()):
+                ax[j+1].title.set_text(name)
+                ax[j+1].title.set_fontsize(100)
+                ax[j+1].imshow(torch_img_to_numpy(pred_part))
+                fig.savefig(
+                    os.path.join(args.out_dir, 'img_%s.%d.png' % (args.experiment, i)))
             plt.close()
 
     dset.data_df['pred'] = preds
@@ -708,7 +714,7 @@ def main():
     parser.add('--experiment', '-e', required=True, help='experiment name')
     parser.add('--out-dir', '-o', help='output directory')
     parser.add('--resume', type=str, metavar='PATH', help='path to latest checkpoint')
-    parser.add( '--override-model-opts', type=csv_list, default='override-model-opts,resume,experiment,out-dir,save-every,print-every,eval-every,scheduler,log-file', help='when resuming, change these options [default: %(default)s]')
+    parser.add( '--override-model-opts', type=csv_list, default='override-model-opts,resume,experiment,out-dir,save-every,print-every,eval-every,scheduler,log-file,do', help='when resuming, change these options [default: %(default)s]')
     parser.add('--force-overwrite', type=int, default=0, help='overwrite existing checkpoint, if it exists [default: %(default)s]')
     parser.add( '--do', choices=('train','score','submit','baseline'), default='train', help='mode of operation. score: compute losses and iou over training and validation sets. submit: write output files with run-length encoded predictions. baseline: compute losses with global average as prediction [default: %(default)s]')
     parser.add( '--predictions-file', type=str, help='file name for predictions output')
@@ -779,6 +785,8 @@ def main():
 
     init_logging(args)
 
+    time_start = time.time()
+
     if args.predictions_file is None:
         args.predictions_file = os.path.join(
             args.out_dir, 'predictions_%s.csv' %
@@ -797,8 +805,6 @@ def main():
                     'best_iou_it': 0,
                     'lr': args.lr,
                     'args': args}
-
-    time_start = time.time()
 
     # parse target(s)
 
@@ -840,6 +846,11 @@ def main():
         # make sure args here is consistent with possibly updated
         # global_state['args']!
         args = global_state['args']
+
+        # if targets from model are not overriden, reparsing is necessary
+        if 'targets' not in args.override_model_opts:
+            targets = parse_targets(args)
+
         args.force_overwrite = 1
         model = dev(model)
     else:
@@ -855,7 +866,6 @@ def main():
     logging.info(model)
     logging.info('number of parameters: %d\n' %
                  sum([param.nelement() for param in model.parameters()]))
-
 
     # set up optimizer
 
