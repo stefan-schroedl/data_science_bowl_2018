@@ -240,6 +240,32 @@ def run_model(model, input, train=True):
     return model(input)
 
 
+def apply_weights(data_row, targets, meter, instance_weight_field):
+
+    """set instance and class weights for targets"""
+
+    if instance_weight_field is None:
+        batch_size = data_row[targets[0]['col']].size()[0]
+        w = torch.ones(batch_size, 1)
+    else:
+        w = data_row[instance_weight_field]
+        for i in range(w.size()[0]):
+            meter.update(instance_weight_field, as_py_scalar(w[i]))
+
+    # make size broadcastable with batch dimension
+    w = dev(w).view(-1, 1, 1, 1)
+
+    for target in targets:
+        if target['w_class'] == 1.0:
+            target['crit'].weight = w
+        else:
+            t = data_row[target['col']]
+            sz = t.size()
+            w_class = w.clone().repeat(1, sz[1], sz[2], sz[3])
+            w_class[t > 0.0] *= target['w_class']
+            target['crit'].weight = w_class
+
+
 def apply_criteria(data_row,
                    pred,
                    targets,
@@ -252,26 +278,19 @@ def apply_criteria(data_row,
 
     """for one row of input, run the model, evaluate the criteria, and update stats"""
 
-    # replicate predictions in case of single-target model
+    # if necessary, replicate predictions in case of single-target model
+
     if not isinstance(pred, (dict, OrderedDict)):
         if len(targets) > 1:
             logging.warn('apparently using single-task model for multiple tasks')
 
         pred = dict([(target['name'],pred) for target in targets])
 
-    # set instance weights
 
-    if instance_weight_field is not None:
-        w = data_row[instance_weight_field]
-        for i in range(w.size()[0]):
-            meter.update(instance_weight_field, w[i])
-        # make size broadcastable with batch dimension
-        w = dev(w.float().unsqueeze(1).unsqueeze(1).unsqueeze(1))
-    else:
-        w = dev(torch.ones(1))
+    # set weights in criteria
 
-    for target_spec in targets:
-        target_spec['crit'].weight = w
+    apply_weights(data_row, targets, meter, instance_weight_field)
+
 
     # apply criteria
 
@@ -288,6 +307,7 @@ def apply_criteria(data_row,
         losses[name] = l
         meter.update(name, as_py_scalar(l))
 
+
     # calculate iou
 
     if calc_iou:
@@ -297,10 +317,27 @@ def apply_criteria(data_row,
             meter.update('iou',
                 iou_metric(data_row[target_field_iou][n].numpy().squeeze(), pred_l))
 
+
     # sum total loss, and add it to meter
-    total_loss = torch.sum(torch.cat([losses[target['name']] * target['w'] for target in targets]))
+
+    total_loss = torch.sum(torch.cat([losses[target['name']] * target['w_crit'] for target in targets]))
     meter.update('loss', as_py_scalar(total_loss))
     return total_loss
+
+
+def transfer_data(row, targets, input_field, instance_weight_field=None):
+    """
+    transfer images and masks to gpu.
+
+    hopefully the transfer can be parallelized with model execution.
+"""
+
+    fields = [input_field]
+    fields.extend([t['col'] for t in targets])
+    if instance_weight_field is not None:
+        fields.append(instance_weight_field)
+    for field in fields:
+        row[field] = dev(row[field])
 
 
 def validate(
@@ -333,6 +370,8 @@ def validate(
 
 
     for i, row in tqdm(enumerate(loader), desc='valid', total=loader.__len__()):
+
+        transfer_data(row, targets, input_field, instance_weight_field)
 
         if calc_baseline:
             pred = {}
@@ -490,6 +529,8 @@ def train_cnn(train_loader,
         logging.debug('start closure %d' % closure_cnt[0])
 
         for mb_acc in acc:
+
+            transfer_data(mb_acc, targets, global_state['args'].input_field, global_state['args'].instance_weights)
 
             pred = run_model(model, mb_acc[global_state['args'].input_field], train=True)
 
@@ -688,24 +729,38 @@ def parse_targets(args):
     targets = []
 
     for spec in args.targets:
-        # <name>:<dataset column>:<weight>
-        parts = spec.split(':')
-        if len(parts) == 2:
-            w = 1.0
-        elif len(parts) == 3:
-            w = float(parts[2])
-        else:
+        # <name>:<dataset column>:<criterion_weight>:<class_weight>
+        # criterion and class weights are optional
+        try:
+            parts = spec.split(':')
+            if len(parts) == 2:
+                w_crit = 1.0
+                w_class = 1.0
+            elif len(parts) == 3:
+                w_crit = float(parts[2])
+                w_class = 1.0
+            elif len(parts) == 4:
+                if len(parts[2]) == 0:
+                    w_crit = 1.0
+                else:
+                    w_crit = float(parts[2])
+                w_class = float(parts[3])
+            else:
+                raise ValueError('invalid target specification: %s' % spec)
+        except:
             raise ValueError('invalid target specification: %s' % spec)
+
         targets.append(
             {'name' : parts[0],
              'col' : parts[1],
              'crit' : make_criterion(args),
-             'w' : w})
+             'w_crit' : w_crit,
+             'w_class': w_class})
 
         # normalize weights
-        s = float(sum([target['w'] for target in targets]))
+        s = float(sum([target['w_crit'] for target in targets]))
         for target in targets:
-            target['w'] /= s
+            target['w_crit'] /= s
 
     return targets
 
@@ -736,7 +791,7 @@ def main():
     parser.add( '--grad-accum', default=1, type=int, metavar='N', help='number of batches between gradient descent [default: %(default)s]')
     parser.add('--weight-init', default='kaiming', choices=['kaiming', 'xavier', 'default'], help='weight initialization method default: %(default)s]')
     parser.add( '--input-field', type=str, default='images_prep', help='dataset field to pass to model as input [default: %(default)s]')
-    parser.add( '--targets', type=csv_list, default='seg:masks_prep_bin:1.0', help='target(s), as comma-delimited list of: <name>:<dataset fields>:<weight>. If more than one, model is expected to return dictionary with names [default: %(default)s]')
+    parser.add( '--targets', type=csv_list, default='seg:masks_prep_bin:1.0:1.0', help='one or multiple targets, as comma-delimited list of: <name>:<dataset field>:<target_weight>:<class_weight>. class_weight is a weight multiplier for non-zero mask pixels. <target_weight> and <class_weight> are optional. For multiple targets, model is expected to return dictionary of target names [default: %(default)s]')
     parser.add( '--criterion', '-C', default='bce', choices=[ 'mse', 'bce', 'jaccard', 'dice'], help='type of loss function [default: %(default)s]')
     parser.add( '--instance-weights', type=str,  metavar='W', help='use this dataset column as instance weights during training [default: %(default)s]')
     parser.add('--weight-decay', default=1e-4, type=float, metavar='W', help='weight decay [default: %(default)s]')

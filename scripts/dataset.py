@@ -184,8 +184,8 @@ class NucleusDataset(Dataset):
                 prep_bin = binarize(prep)
                 masks_prep_bin.append(prep_bin)
                 contours.append(get_contour(prep_bin))
-
-                inst_wt.append(1.0 / (m.flatten().max() + 1.0))
+                w = (1.0 / (m.flatten().max() + 1.0)).astype(np.float32)
+                inst_wt.append(w)
 
         # for some reason, the following (which is recommended) gives an error:
         # self.data_df.loc[:, 'imgs_prep'] = imgs_prep
