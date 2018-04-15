@@ -38,6 +38,7 @@ checkpoint = torch.load(model_fn, map_location='cpu') # always load to cpu first
 model = UNetClassify(layers=4, init_filters=32)
 model.load_state_dict(checkpoint['state_dict'])
 im_in=cv2.imread(fn)[:,:,:1] # get the gray scale
+im_in[im_in>0]=255
 
 print im_in.shape
 
