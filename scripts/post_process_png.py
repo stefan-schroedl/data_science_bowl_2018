@@ -1,30 +1,48 @@
 import cv2
 import sys
-from KNN import *
+import shutil
+from nuc_trans  import random_rotate90_transform2
+from architectures import UNetClassify
+import numpy as np
+import torch
+from torch.autograd import Variable
+import cv2
+import random
+import os
+import sys
+import torch.optim as optim
+from mnet import MNET
+import torch.nn.functional as F
+import torch.nn as nn
 
-if len(sys.argv)<2:
-    print sys.argv[0] + " f1 f2 ..."
+def n2t(im):
+	return torch.from_numpy(np.transpose(im, (2, 0, 1)).astype(np.float)/255).float()
+
+def t2n(im):
+	n=im.cpu().data.numpy()
+	n-=n.min()
+	#n[n<0]=0
+	div=255.0/max(1.0,n.max())
+	return (np.transpose(n,(1,2,0))*div).astype(np.uint8)
+
+if len(sys.argv)!=3:
+    print sys.argv[0] + "in_fn im_fn_out"
     sys.exit(1)
 
-fns=sys.argv[2:]
+fn=sys.argv[1]
+fn_out=sys.argv[2]
+fname='checkpoint.pth.tar'
+checkpoint = torch.load(fname, map_location='cpu') # always load to cpu first!
 
-d={}
 
-for fn in fns:
-    n="_".join(fn.replace('.png','').split('_')[2:])
-    print fn,n
-    d[n]=cv2.imread(fn)
-    if (d[n][:,:,0]==d[n][:,:,1]).mean()==1.0 and (d[n][:,:,1]==d[n][:,:,2]).mean()==1.0:
-        d[n]=(d[n][:,:,0])[:,:]
+model = UNetClassify(layers=4, init_filters=32)
+model.load_state_dict(checkpoint['state_dict'])
+im_in=cv2.imread(fn)[:,:,:1] # get the gray scale
 
-print d.keys()
-model=KNN()
-print d['seg'].dtype,d['seg'].shape
-_,super_boundary_thresh = cv2.threshold(d['super_boundary'],20,255,cv2.THRESH_BINARY)
-l=model.label(super_boundary_thresh.copy(),d['seg'].copy())
-print l.shape
-cl=model.color_label(l)
-cv2.imshow('cl',cl)
-cv2.waitKey(50000)
+print im_in.shape
 
+in_im_t=Variable(n2t(im_in).unsqueeze(0))
+output=model(in_im_t)
+im_pred_np=t2n(output[0])
+cv2.imwrite(fn_out,im_pred_np)
 

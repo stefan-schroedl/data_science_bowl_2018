@@ -14,13 +14,13 @@ import torch.nn.functional as F
 import torch.nn as nn
 
 if len(sys.argv)!=3:
-    print "%s data_dir superbounds/bounds" % sys.argv[0]
+    print "%s data_dir superbounds/bounds/center" % sys.argv[0]
     sys.exit(1)
 
 data_dir=sys.argv[1]
 pred_ty=sys.argv[2]
-if pred_ty not in ['superbounds','bounds']:
-    print "ONLY TYPES ARE",'superbounds','bounds'
+if pred_ty not in ['superbounds','bounds','center']:
+    print "ONLY TYPES ARE",'superbounds','bounds','center'
     sys.exit(1)
 
 test_d={}
@@ -84,7 +84,7 @@ d=load_dataset(data_dir)
 model = UNetClassify(layers=4, init_filters=32)
 #model = MNET()
 
-cuda=True
+cuda=False
 if cuda:
     model=model.cuda()
 
@@ -112,7 +112,11 @@ for batch_id in xrange(1000000):
 	#print load_image(data_dir,train_d[im_id]['seg']).shape
 
 	im_in=load_image(data_dir,train_d[im_id]['seg'],c=0)
-	im_out=dilate(load_image(data_dir,train_d[im_id][pred_ty],c=0))
+        im_out=None
+        if pred_ty in ['center']:
+	    im_out=load_image(data_dir,train_d[im_id][pred_ty],c=0)
+        else:
+	    im_out=dilate(load_image(data_dir,train_d[im_id][pred_ty],c=0))
 	im_in, im_out = random_rotate90_transform2(im_in, im_out)
         im_in=Variable(n2t(im_in).unsqueeze(0))
         im_out=Variable(n2t(im_out).unsqueeze(0))
@@ -127,7 +131,7 @@ for batch_id in xrange(1000000):
 	im_out_np=t2n(im_out[0])
 	im_pred_np=t2n(output[0])
         if it%100==0:
-		cv2.imwrite('out%d.png' % (it%10),np.concatenate((im_pred_np,im_out_np),axis=1))
+		cv2.imwrite('out%d.png' % (np.random.randint(10)),np.concatenate((im_pred_np,im_out_np),axis=1))
 	#cv2.waitKey(20)
     bit+=1
     if bit%100==1:
