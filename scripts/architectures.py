@@ -2,6 +2,7 @@
 
 import math
 import logging
+from collections import OrderedDict
 
 import torch
 import torch.autograd as autograd
@@ -13,6 +14,18 @@ from torch.nn.utils import weight_norm
 from groupnorm import GroupNorm
 
 INPLACE = True
+
+USE_GROUPNORM = True
+
+def norm_layer(num_filters, dummy=None):
+    if USE_GROUPNORM:
+        groups = num_filters
+        return GroupNorm(num_filters, groups)
+    else:
+        affine = True
+        mom = 0.0
+        return nn.BatchNorm2d(num_filters)
+
 
 def init_weights(net, method='kaiming'):
     if method not in ['kaiming', 'xavier']:
@@ -127,34 +140,34 @@ class CNN(nn.Module):
 
         self.layer1 = nn.Sequential(
             #nn.BatchNorm2d(15, affine=affine, momentum=mom),
-            GroupNorm(15,15),
+            norm_layer(15,15),
             nn.Conv2d(15, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU(inplace=INPLACE),
             nn.MaxPool2d(3, stride=1, padding=1))
         self.layer2 = nn.Sequential(
             #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
-            GroupNorm(num_filters, groups),
+            norm_layer(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU(inplace=INPLACE),
             nn.MaxPool2d(3, stride=1, padding=1))
         self.layer3 = nn.Sequential(
             #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
-            GroupNorm(num_filters, groups),
+            norm_layer(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU(inplace=INPLACE))
         self.layer4 = nn.Sequential(
             #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
-            GroupNorm(num_filters, groups),
+            norm_layer(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU(inplace=INPLACE))
         self.layer5 = nn.Sequential(
             #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
-            GroupNorm(num_filters, groups),
+            norm_layer(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU(inplace=INPLACE))
         self.layer6 = nn.Sequential(
             #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
-            GroupNorm(num_filters, groups),
+            norm_layer(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU(inplace=INPLACE))
         self.layer7 = nn.Sequential(
@@ -208,7 +221,7 @@ class UNetBlock(nn.Module):
         self.norm1 = GroupNorm(filters_out, filters_out)
         self.conv2 = nn.Conv2d(filters_out, filters_out, (k, k), padding=k/2)
         #self.norm2 = nn.BatchNorm2d(filters_out)
-        self.norm2 = GroupNorm(filters_out, filters_out)
+        self.norm2 = norm_layer(filters_out, filters_out)
 
         self.activation = nn.ReLU(inplace=INPLACE)
 
@@ -241,7 +254,7 @@ class UNetUpBlock(UNetBlock):
         super(UNetUpBlock, self).__init__(filters_in, filters_out)
         self.upconv = nn.Conv2d(filters_in, filters_in // 2, (k, k), padding=k/2)
         #self.upnorm = nn.BatchNorm2d(filters_in // 2)
-        self.upnorm = GroupNorm(filters_in // 2, filters_in // 2)
+        self.upnorm = norm_layer(filters_in // 2, filters_in // 2)
 
     def forward(self, x, cross_x):
         x = F.upsample(x, size=cross_x.size()[-2:], mode='bilinear')
@@ -277,7 +290,7 @@ class UNet(nn.Module):
         self.init_layer = nn.Conv2d(1, init_filters, (7, 7), padding=3)
         self.activation = nn.ReLU(inplace=INPLACE)
         #self.init_norm = nn.BatchNorm2d(init_filters)
-        self.init_norm = GroupNorm(init_filters, init_filters)
+        self.init_norm = norm_layer(init_filters, init_filters)
         self.dropout = nn.Dropout(DROPOUT)
 
     def forward(self, x):
@@ -317,3 +330,32 @@ class UNetClassify(UNet):
         # Note that we don't perform the sigmoid here.
         return self.output_layer(x)
 
+
+class UNetClassifyMulti(UNet):
+    def __init__(self, targets, *args, **kwargs):
+        init_val = kwargs.pop('init_val', 0.5)
+        super(UNetClassifyMulti, self).__init__(*args, **kwargs)
+        self.output_layers = {}
+        self.target_names = []
+        for target in targets:
+            conv = nn.Conv2d(self.init_filters, 1, (3, 3), padding=1)
+            name = target['name']
+            self.target_names.append(name)
+            self.add_module(name, conv) # needed such that cuda() etc finds submodules!
+
+        for name, param in self.named_parameters():
+            typ = name.split('.')[-1]
+            if typ == 'bias':
+                if 'output_layer' in name:
+                    # Init so that the average will end up being init_val
+                    param.data.fill_(-math.log((1-init_val)/init_val))
+                else:
+                    param.data.zero_()
+
+    def forward(self, x):
+        x = super(UNetClassifyMulti, self).forward(x)
+        # Note that we don't perform the sigmoid here.
+        pred = OrderedDict()
+        for n in self.target_names:
+            pred[n] = self.__getattr__(n)(x)
+        return pred

@@ -24,7 +24,7 @@ class KNN():
         self.super_boundary_threshold=super_boundary_threshold
         self.cutoff=1e5
         self.boundary_cutoff=1 #50
-        self.channels=9
+        self.channels=8
         self.boundary_blur=9 #9
         self.patch_size=patch_size
         self.boundary_patch_size=13
@@ -46,10 +46,13 @@ class KNN():
         self.match_method=match_method
         self.img_sig=set([])
         self.erode_training_masks=erode
-        self.unique_patches=[]
-        self.unique_patches_idxs=[]
-        self.top_patches=15
+        #self.unique_patches=[]
+        #self.unique_patches_idxs=[]
+        #self.top_patches=15
         self.similar_patches_cutoff=1
+
+    def parameters(self):
+        return []
 
     def load(fn):
         m=pickle.load( open(fn, "rb" ) )
@@ -60,8 +63,8 @@ class KNN():
         k=KNN(self.n,self.nn,self.patch_size,self.sample,self.gauss_blur,self.similarity,self.normalize,self.super_boundary_threshold,self.erode_training_masks,self.match_method)
         k.histograms=self.histograms
         k.histogram_numpy=self.histograms_numpy
-        k.unique_patches=self.unique_patches
-        k.unique_patches_numpy=self.unique_patches_numpy
+        #k.unique_patches=self.unique_patches
+        #k.unique_patches_numpy=self.unique_patches_numpy
         output=open(filename, 'wb')
         pickle.dump(k, output, pickle.HIGHEST_PROTOCOL)
 
@@ -83,7 +86,7 @@ class KNN():
             h[2]*=0
         return np.concatenate(h)[:,0]
 
-    def get_stacked(self,img,mask,mask_seg,mask_eroded):
+    def get_stacked(self,img,mask,mask_seg):
         super_boundary = mask.copy()[:,:,0]*0
         super_boundary_2 = mask.copy()[:,:,0]*0
         max_components=mask.max()
@@ -116,31 +119,32 @@ class KNN():
         #5 BLEND
         #6 SUPER BOUNDARY
         #7 SUPER BOUNDARY 2
-        stacked_img = np.concatenate((img,mask_seg,boundary,np.maximum(mask_seg/2,boundary),super_boundary[:,:,None],super_boundary_2[:,:,None],mask_eroded),axis=2)
+        stacked_img = np.concatenate((img,mask_seg,boundary,np.maximum(mask_seg/2,boundary),super_boundary[:,:,None],super_boundary_2[:,:,None]),axis=2)
         return stacked_img.astype(np.uint8)
 
     def prepare_fit(self,img,mask,mask_seg):
-        if img.sum() in self.img_sig:
+        s=img.sum()
+        if s in self.img_sig:
             return 
         print "ADDING IMAGE TO DB!"
-        self.img_sig.add(img.sum())
+        self.img_sig.add(s)
 	img = (img.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
         mask = (mask.numpy()[0].transpose(1,2,0)).astype(np.uint8)
-        kernel = np.ones((3,3), np.uint8)
-        mask_eroded=cv2.erode(mask, kernel, iterations=1)[:,:,None].astype(np.uint8)
+        #kernel = np.ones((3,3), np.uint8)
+        #mask_eroded=cv2.erode(mask, kernel, iterations=1)[:,:,None].astype(np.uint8)
 
         mask_seg = (mask_seg.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
 
-        self.images.append((img,mask,mask_seg,mask_eroded))
+        self.images.append((img,mask,mask_seg))
         self.histograms.append(self.get_hist(img))
         self.faiss_model=None
 
         
-        data_patches=self.get_top_patches(img,how_many=-1)
+        #data_patches=self.get_top_patches(img,how_many=-1)
         #add the labels
-        self.unique_patches_idxs.append([len(self.unique_patches_idxs)]*data_patches.shape[0])
+        #self.unique_patches_idxs.append([len(self.unique_patches_idxs)]*data_patches.shape[0])
         #add the patches
-        self.unique_patches.append(data_patches)
+        #self.unique_patches.append(data_patches)
 
     def get_top_patches(self,img,how_many=None):
         if how_many==None:
@@ -201,10 +205,10 @@ class KNN():
         self.histogram_model = faiss.IndexFlatL2(256*3)
         self.histogram_model.add(self.histograms_numpy.astype(np.float32))
         #make unique model 
-        self.unique_patches_idxs_numpy = np.concatenate(self.unique_patches_idxs,axis=0)
-        self.unique_model = faiss.IndexFlatL2(self.patch_size*self.patch_size*3)
-        self.unique_patches_numpy = np.concatenate(self.unique_patches,axis=0) # np.reshape(self.unique_patches, newshape=(len(self.unique_patches_idxs),self.patch_size*self.patch_size*3))
-        self.unique_model.add(self.unique_patches_numpy.astype(np.float32))
+        #self.unique_patches_idxs_numpy = np.concatenate(self.unique_patches_idxs,axis=0)
+        #self.unique_model = faiss.IndexFlatL2(self.patch_size*self.patch_size*3)
+        #self.unique_patches_numpy = np.concatenate(self.unique_patches,axis=0) # np.reshape(self.unique_patches, newshape=(len(self.unique_patches_idxs),self.patch_size*self.patch_size*3))
+        #self.unique_model.add(self.unique_patches_numpy.astype(np.float32))
 
     def resize(self,img,f):
         return cv2.resize(img.astype(np.uint8), (0,0), fx=f, fy=f) 
@@ -220,8 +224,8 @@ class KNN():
         for idx in image_idxs:
             if idx<0:
                 continue
-            img,mask,mask_seg,mask_eroded = self.images[idx]
-            stacked_img_orig=self.get_stacked(img,mask,mask_seg,mask_eroded)
+            img,mask,mask_seg = self.images[idx]
+            stacked_img_orig=self.get_stacked(img,mask,mask_seg)
             h,w=stacked_img_orig.shape[:2]
             for y in [0.5,1,2]:
                 stacked_img_scaled=self.resize(stacked_img_orig,y) 
@@ -527,7 +531,7 @@ class KNN():
         for idx in image_idxs:
             if idx<0:
                 continue
-            img,mask,mask_seg,mask_eroded = self.images[idx]
+            img,mask,mask_seg = self.images[idx]
             self.guess.prepare_fit(img,mask,mask_seg,torch=False)
 
     def similar_by_hist(self,img):
@@ -598,7 +602,7 @@ class KNN():
         similar_hist_images_idxs=self.similar_by_hist(img)
         for idx in similar_hist_images_idxs:
             if idx>=0:
-                img2,_,_,_ = self.images[idx]
+                img2,_,_ = self.images[idx]
                 similar_hist_images.append(cv2.resize(img2, (256, 256)))
 
         patch_model = None
@@ -656,7 +660,7 @@ class KNN():
 	reconstructed_blend = reconstructed[:,:,5].astype(np.uint8)
 	reconstructed_super_boundary = reconstructed[:,:,6].astype(np.uint8)
 	reconstructed_super_boundary_2 = reconstructed[:,:,7].astype(np.uint8)
-	reconstructed_mask_eroded = reconstructed[:,:,7].astype(np.uint8)
+	#reconstructed_mask_eroded = reconstructed[:,:,7].astype(np.uint8)
 
         _,clustered=self.by_cluster(img,reconstructed)
 
