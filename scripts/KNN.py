@@ -7,7 +7,11 @@ import cv2
 import faiss   
 from transform import random_rotate90_transform1
 from GUESS import *
+import cPickle as pickle
+
 class KNN():
+    def eval():
+        return 
     def __init__(self,n=5,hist_n=10,patch_size=13,sample=400,gauss_blur=False,similarity=False,normalize=True,super_boundary_threshold=20,erode=False,match_method='hist'):
         print "SAMPLE IS ",sample, "SHOULD BE ~400?"
         print "TRY TO START WITH SUPER BOUNDARY INSTEAD OF JUST BOUNDARY>????"
@@ -24,7 +28,7 @@ class KNN():
         self.boundary_blur=9 #9
         self.patch_size=patch_size
         self.boundary_patch_size=13
-        self.model =  KNeighborsClassifier(n_neighbors=n,n_jobs=-1,algorithm='kd_tree') 
+        #self.model =  KNeighborsClassifier(n_neighbors=n,n_jobs=-1,algorithm='kd_tree') 
         self.sample = sample
         self.patches = [] #np.array([]) 
         self.patches_3d = [] #np.array([])
@@ -47,6 +51,27 @@ class KNN():
         self.unique_patches_idxs=[]
         self.top_patches=15
         self.similar_patches_cutoff=1
+        self.loaded_but_not_fit=False
+
+    def save(self,filename):
+        k=KNN(self.n,self.nn,self.patch_size,self.sample,self.gauss_blur,self.similarity,self.normalize,self.super_boundary_threshold,self.erode_training_masks,self.match_method)
+        k.histograms=self.histograms
+        k.histogram_numpy=self.histograms_numpy
+        k.unique_patches=self.unique_patches
+        k.unique_patches_numpy=self.unique_patches_numpy
+        k.loaded_but_not_fit=True
+        #generate the histogram index
+        #self.histograms_numpy = np.reshape(self.histograms, newshape=(len(self.histograms), 256*3))
+        #self.histogram_model = faiss.IndexFlatL2(256*3)
+        #self.histogram_model.add(self.histograms_numpy.astype(np.float32))
+        ##make unique model 
+        #self.unique_patches_idxs_numpy = np.concatenate(self.unique_patches_idxs,axis=0)
+        #self.unique_model = faiss.IndexFlatL2(self.patch_size*self.patch_size*3)
+        #self.unique_patches_numpy = np.concatenate(self.unique_patches,axis=0) # np.reshape(self.unique_patches, newshape=(len(self.unique_patches_idxs),self.patch_size*self.patch_size*3))
+        #self.unique_model.add(self.unique_patches_numpy.astype(np.float32))
+
+        output=open(filename, 'wb')
+        pickle.dump(k, output, pickle.HIGHEST_PROTOCOL)
 
     def color_check(self,img):
         if img.std(axis=2).mean()<0.01:
@@ -215,7 +240,7 @@ class KNN():
         self.patches_3d = []
         self.patches = []
         self.patches_super_boundary = []
-        self.patches_super_boundary_2 = []
+        #self.patches_super_boundary_2 = []
         #generate the patches
         total_patches=0
         for idx in image_idxs:
@@ -252,13 +277,13 @@ class KNN():
                         #data_patches_super_boundary = extract_patches_2d(super_boundary, (self.patch_size,self.patch_size) ,random_state=1000).astype(np.float64)
 
                         #add regular patches
-                        blurred_super_boundary_2=cv2.GaussianBlur(super_boundary,(3,3),0)
-                        data_patches_super_boundary_2 = extract_patches_2d(blurred_super_boundary_2, (self.boundary_patch_size,self.boundary_patch_size) ,random_state=1000,max_patches=self.sample).astype(np.float64)
-                        data_patches_super_boundary_2 = data_patches_super_boundary_2.reshape(data_patches_super_boundary_2.shape[0], -1)
+                        #blurred_super_boundary_2=cv2.GaussianBlur(super_boundary,(3,3),0)
+                        #data_patches_super_boundary_2 = extract_patches_2d(blurred_super_boundary_2, (self.boundary_patch_size,self.boundary_patch_size) ,random_state=1000,max_patches=self.sample).astype(np.float64)
+                        #data_patches_super_boundary_2 = data_patches_super_boundary_2.reshape(data_patches_super_boundary_2.shape[0], -1)
                         ##there are patches that have a max of 0 or 1 , which results just in a solid white or black patch?
-                        data_patches_super_boundary_2 = data_patches_super_boundary_2[data_patches_super_boundary_2.max(axis=1)>self.boundary_cutoff]
-                        data_patches_super_boundary_2 = (data_patches_super_boundary_2 / data_patches_super_boundary_2.max(axis=1)[:,None])*255
-                        self.patches_super_boundary_2.append(data_patches_super_boundary_2)
+                        #data_patches_super_boundary_2 = data_patches_super_boundary_2[data_patches_super_boundary_2.max(axis=1)>self.boundary_cutoff]
+                        #data_patches_super_boundary_2 = (data_patches_super_boundary_2 / data_patches_super_boundary_2.max(axis=1)[:,None])*255
+                        #self.patches_super_boundary_2.append(data_patches_super_boundary_2)
 
                         #add the blurred patches
                         #imgs_to_use=[super_boundary,boundary,np.maximum(super_boundary,boundary)]]
@@ -288,10 +313,10 @@ class KNN():
         super_boundary_model = faiss.IndexFlatL2(self.patches_super_boundary_numpy.shape[1])
         super_boundary_model.add(self.patches_super_boundary_numpy.astype(np.float32))
 
-        c=self.boundary_patch_size*self.boundary_patch_size*1
-        self.patches_super_boundary_2_numpy = np.concatenate(self.patches_super_boundary_2,axis=0)
-        super_boundary_2_model = faiss.IndexFlatL2(self.patches_super_boundary_2_numpy.shape[1])
-        super_boundary_2_model.add(self.patches_super_boundary_2_numpy.astype(np.float32))
+        #c=self.boundary_patch_size*self.boundary_patch_size*1
+        #self.patches_super_boundary_2_numpy = np.concatenate(self.patches_super_boundary_2,axis=0)
+        super_boundary_2_model = None #faiss.IndexFlatL2(self.patches_super_boundary_2_numpy.shape[1])
+        #super_boundary_2_model.add(self.patches_super_boundary_2_numpy.astype(np.float32))
 
         return model,super_boundary_model,super_boundary_2_model
 
@@ -334,15 +359,14 @@ class KNN():
             r[:,:2]=0
             r[:,-2:]=0
             reconstructed = np.maximum(r , super_boundary_orig)
-        for xx in range(0):
-            r=self.reconstruct(reconstructed,self.patches_super_boundary_2_numpy,self.boundary_patch_size,self.super_boundary_2_model)
-            #take out border artifacts
-            r[:2,:]=0
-            r[-2:,:]=0
-            r[:,:2]=0
-            r[:,-2:]=0
-            reconstructed = r#np.maximum(r , super_boundary_orig)
-        #print reconstructed.shape,"WTF"
+        #for xx in range(0):
+        #    r=self.reconstruct(reconstructed,self.patches_super_boundary_2_numpy,self.boundary_patch_size,self.super_boundary_2_model)
+        #    #take out border artifacts
+        #    r[:2,:]=0
+        #    r[-2:,:]=0
+        #    r[:,:2]=0
+        #    r[:,-2:]=0
+        #    reconstructed = r#np.maximum(r , super_boundary_orig)
         cv2.imshow('reconstructed / orig + 2 / orig',np.concatenate((reconstructed[:,:,None],super_boundary[:,:,None],super_boundary_orig[:,:,None]),axis=1).astype(np.uint8))
         cv2.waitKey(4000)
         return reconstructed
@@ -487,7 +511,7 @@ class KNN():
         burred_boundary=blurred_boundary.astype(np.uint8)
 	return burred_boundary
 
-    def by_cluster(self,img,reconstructed,similar_contours):
+    def by_cluster(self,img,reconstructed):
         assert(reconstructed.shape[2]==self.channels)
         img=img.copy()
         height,width,_=img.shape
@@ -669,6 +693,7 @@ class KNN():
         return l
 
     def predict(self,img,gt=None):
+        self.save('out_model.pkl')
         print "CONVEX HULL CHECK"
         print "SHRINK ALL BOUNDARIES, ESPECIALLY THOSE WITH OTHER MASKS NEARBY! OVERLAP -> 0 PREDICTION"
         print "TODO: subtract super boundaries from regular"
@@ -676,7 +701,6 @@ class KNN():
 	img = (img.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
 	gt = (gt.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
 
-        similar_contours = []
 
         similar_hist_images=[]
         similar_hist_images_idxs=self.similar_by_hist(img)
@@ -688,23 +712,11 @@ class KNN():
                 #cv2.imshow("y",img2)
                 #cv2.waitKey(2000)
 
-        similar_patch_images=[]
-        similar_patch_images_idxs=self.similar_by_patches(img)
-        for idx in similar_patch_images_idxs:
-            if idx>=0:
-                img2,_,_,_ = self.images[idx]
-                similar_patch_images.append(cv2.resize(img2, (256, 256)))
-                #similar_patch_images.append(imutils.resize(img2, height=256).astype(np.uint8))
-                #cv2.imshow("x",similar_patch_images[-1])
-                #cv2.waitKey(2000)
-
         patch_model = None
         super_boundary_model = None
         if self.match_method=='hist':
             patch_model,self.super_boundary_model, self.super_boundary_2_model = self.make_index(similar_hist_images_idxs) #,use_all=True)
-            self.guess_prepare(similar_hist_images_idxs)
-        elif self.match_method=='patch':
-            patch_model,self.super_boundary_model, self.super_boundary_2_model = self.make_index(similar_patch_images_idxs) #,use_all=True)
+            #self.guess_prepare(similar_hist_images_idxs)
         else:
             print "INVALID MODEL TYPE"
 
@@ -754,8 +766,6 @@ class KNN():
             reconstructed = reconstruct_from_patches_2d( knn_patches, (height, width,self.channels))
             reconstructed_img = reconstructed[:,:,:3].astype(np.uint8)
             img=reconstructed_img.copy()
-        #cv2.imshow('recon',reconstructed_img)
-        #cv2.waitKey(10000)
 	reconstructed_mask = reconstructed[:,:,3].astype(np.uint8)
 	reconstructed_boundary = reconstructed[:,:,4].astype(np.uint8)
 	reconstructed_blend = reconstructed[:,:,5].astype(np.uint8)
@@ -763,42 +773,25 @@ class KNN():
 	reconstructed_super_boundary_2 = reconstructed[:,:,7].astype(np.uint8)
 	reconstructed_mask_eroded = reconstructed[:,:,7].astype(np.uint8)
 
-        #cv2.imshow('mask vs eroded',np.concatenate((reconstructed_mask,reconstructed_mask_eroded),axis=1))
-        _,reconstructed_mask_thresh = cv2.threshold(reconstructed_super_boundary,self.super_boundary_threshold,255,cv2.THRESH_BINARY)
-        #cv2.waitKey(10)
+        #_,reconstructed_mask_thresh = cv2.threshold(reconstructed_super_boundary,self.super_boundary_threshold,255,cv2.THRESH_BINARY)
         print "HIGHER THRESHOLD!!!! ON MASK!!!!"
-        enhanced,clustered=self.by_cluster(img,reconstructed,similar_contours)
+        enhanced,clustered=self.by_cluster(img,reconstructed)
 
-        _,reconstructed_super_boundary_thresh = cv2.threshold(reconstructed_super_boundary,self.super_boundary_threshold,255,cv2.THRESH_BINARY)
-        labeled=self.label(reconstructed_super_boundary_thresh,reconstructed_mask).astype(np.int32)-1 #background from 1 -> 0
-        labeled2=cv2.watershed(img,labeled+1)-1
-        labeled2[labeled2<0]=0
-        labeled2=labeled2.astype(np.uint8)
-        #lets try to do something one cluster at a time?
-        #cv2.imshow('watershed',labeled2)
-        #cv2.waitKey(3)
+        #create labeled, and labeled2
+        #_,reconstructed_super_boundary_thresh = cv2.threshold(reconstructed_super_boundary,self.super_boundary_threshold,255,cv2.THRESH_BINARY)
+        #labeled=self.label(reconstructed_super_boundary_thresh,reconstructed_mask).astype(np.int32)-1 #background from 1 -> 0
+        #labeled2=cv2.watershed(img,labeled+1)-1
+        #labeled2[labeled2<0]=0
+        #labeled2=labeled2.astype(np.uint8)
         print "SHRINK TRAINING MASKS?????!?!??!?!?!?!?"
         print "TODO ADD THIS ON A PER TILE BASIS? NORMALIZE THERE?"
-        #enhanced=self.enhance(self.img_normalize(reconstructed_super_boundary),self.img_normalize(reconstructed_super_boundary_2))
-        #enhance_boundary = cv2.Laplacian(enhanced,cv2.CV_8U,ksize=13)
-        #cv2.imshow('lap',enhance_boundary)
-        #cv2.imshow('enhanced before threshold',enhanced)
-        #cv2.waitKey(10000)
-        _,enhanced_thresh = cv2.threshold(enhanced,self.super_boundary_threshold*4,255,cv2.THRESH_BINARY)
-        #print enhanced.shape,enhanced_thresh.shape
-        enhanced_label = self.label(enhanced_thresh,reconstructed_mask).astype(np.int32)
-        #enhanced_label = cv2.watershed(img,enhanced_label)-1
-        #cv2.imshow("RECON MASK",reconstructed_mask)
-        #enhanced_label = cv2.watershed(cv2.cvtColor(reconstructed_mask, cv2.COLOR_GRAY2BGR),enhanced_label)-1
-        #cv2.imshow('AFTER WATER',self.color_label(enhanced_label))
-        #cv2.waitKey(10000)
-        #sys.exit(1)
-        enhanced_label[enhanced_label<0]=0
-        enhanced_label=enhanced_label.astype(np.uint8)
+        #_,enhanced_thresh = cv2.threshold(enhanced,self.super_boundary_threshold*4,255,cv2.THRESH_BINARY)
+        #enhanced_label = self.label(enhanced_thresh,reconstructed_mask).astype(np.int32)
+        #enhanced_label[enhanced_label<0]=0
+        #enhanced_label=enhanced_label.astype(np.uint8)
+        #enhanced_label=self.remove_weird_labels(enhanced_label,reconstructed_mask)
 
 
-        enhanced_label=self.remove_weird_labels(enhanced_label,reconstructed_mask)
-        #cv2.imshow('en',enhanced_thresh)
         d={}
         d['img']=reconstructed_img
         d['seg']=reconstructed_mask
@@ -806,41 +799,30 @@ class KNN():
         d['blend']=reconstructed_blend
         d['super_boundary']=reconstructed_super_boundary
         d['super_boundary_2']=reconstructed_super_boundary_2
-	#cv2.imshow('boundary',reconstructed_boundary)
-	#cv2.imshow('boundarys',reconstructed_super_boundary)
-	#cv2.imshow('boundarys2',reconstructed_super_boundary_2)
-	ret2,otsu = cv2.threshold(reconstructed_mask,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
-	dist_transform = cv2.distanceTransform(otsu,cv2.DIST_L2,5)
-	dist_transform = ((dist_transform/dist_transform.max())*255).astype(np.uint8)
-	#cv2.imshow("DIST",dist_transform)
-	#cv2.imshow("MASK",otsu)
-	d['otsu']=otsu
-	d['otsu_dist']=dist_transform
-        #laplacian = cv2.Laplacian(dist_transform,cv2.CV_64F)
-        #laplacian = ((laplacian/laplacian.max())*255).astype(np.uint8)
-        #cv2.imshow("LAPLAC",laplacian)
-        #cv2.waitKey(500000)
-        #sys.exit(1)
-	#cv2.waitKey(5000000)
-        d['labeled']=labeled
-        d['labeled2']=labeled2
-        d['enhanced_label']=enhanced_label
-        d['clustered']=clustered
-        d['similar_patch_images']=similar_patch_images
+	#ret2,otsu = cv2.threshold(reconstructed_mask,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+	#dist_transform = cv2.distanceTransform(otsu,cv2.DIST_L2,5)
+	#dist_transform = ((dist_transform/dist_transform.max())*255).astype(np.uint8)
+	#d['otsu']=otsu
+	#d['otsu_dist']=dist_transform
+        #d['labeled']=labeled
+        #d['labeled2']=labeled2
+        #d['enhanced_label']=enhanced_label
+        #d['clustered']=clustered
         d['similar_hist_images']=similar_hist_images
-        d['enhanced_label_remove']=self.remove_overlap(d['enhanced_label'])
-        d['clustered_remove']=self.remove_overlap(d['clustered'])
-        d['clustered_r2']=self.remove_weird_labels(d['clustered'],reconstructed_mask)
-        d['clustered_r3']=self.remove_weird_labels(d['clustered_remove'],reconstructed_mask)
-        d['clustered_r4']=self.shrink_nuclei(d['clustered'])
+        #d['enhanced_label_remove']=self.remove_overlap(d['enhanced_label'])
+        #d['clustered_remove']=self.remove_overlap(d['clustered'])
+        #d['clustered_r2']=self.remove_weird_labels(d['clustered'],reconstructed_mask)
+        #d['clustered_r3']=self.remove_weird_labels(d['clustered_remove'],reconstructed_mask)
+        d['clustered_r4']=self.shrink_nuclei(clustered)
 	d['gt']=gt
-	for x in ['labeled','labeled2','enhanced_label','clustered','enhanced_label_remove','clustered_remove','clustered_r2','clustered_r3','clustered_r4']:
+	#for x in ['labeled','labeled2','enhanced_label','clustered','enhanced_label_remove','clustered_remove','clustered_r2','clustered_r3','clustered_r4']:
+	for x in ['clustered_r4']:
 		d["color_"+x]=self.color_label(d[x])
-        print "MAX IN LABELS",labeled.max(),labeled2.max(),enhanced_label.max()
-        cv2.imshow('gt',gt)
-        cv2.imshow('color lab l',np.concatenate((self.color_label(labeled),self.color_label(labeled2),self.color_label(enhanced_label),self.color_label(d['enhanced_label_remove']),img),axis=1))
-        cv2.imshow('color lab x',np.concatenate((self.color_label( d['clustered']),self.color_label( d['clustered_remove']),self.color_label(d['clustered_r4'])),axis=1))
-        cv2.waitKey(20000)
+        #print "MAX IN LABELS",labeled.max(),labeled2.max(),enhanced_label.max()
+        #cv2.imshow('gt',gt)
+        #cv2.imshow('color lab l',np.concatenate((self.color_label(labeled),self.color_label(labeled2),self.color_label(enhanced_label),self.color_label(d['enhanced_label_remove']),img),axis=1))
+        #cv2.imshow('color lab x',np.concatenate((self.color_label( d['clustered']),self.color_label( d['clustered_remove']),self.color_label(d['clustered_r4'])),axis=1))
+        #cv2.waitKey(20000)
         return d 
     
     

@@ -372,14 +372,6 @@ def stack_images(imgs,w=5):
 
 valn=0
 iou_pipe=[]
-iou_l=[]
-iou_l2=[]
-iou_el=[]
-iou_elr=[]
-iou_clus=[]
-iou_clusr=[]
-iou_clusr2=[]
-iou_clusr3=[]
 iou_clusr4=[]
 
 def validate_knn(model, loader, criterion):
@@ -395,17 +387,13 @@ def validate_knn(model, loader, criterion):
         i+=1
         if valn==1 and i==1:
             continue
-        #model.prepare_fit(d[1]['images'],d[1]['masks_prep'],d[1]['masks_prep_seg'])
         print d[1].keys()
         img=d[1]['images']
         labels=d[1]['masks_prep']
         labels_seg=d[1]['masks_prep_seg']
         p=model.predict(img,gt=d[1]['masks'])
-        #p_img,p_seg,p_boundary,p_blend,p_super_boundary,p_super_boundary_2,l,l2,el,clus=model.predict(img)
 
         torch_p_seg = torch.from_numpy(p['seg'][None,:,:].astype(np.float)/255).float()
-        #torch_p_boundary = torch.from_numpy(p_boundary[None,:,:].astype(np.float)/255).float()
-        #torch_p_blend = torch.from_numpy(p_blend[None,:,:].astype(np.float)/255).float()
         _,p_super_boundary_thresh = cv2.threshold(p['super_boundary'],args.super_boundary_threshold,255,cv2.THRESH_BINARY)
         _,p_super_boundary_2_thresh = cv2.threshold(p['super_boundary_2'],20,255,cv2.THRESH_BINARY)
         super_boundary_combined = np.concatenate((0*p_super_boundary_thresh[:,:,None],p_super_boundary_thresh[:,:,None],p_super_boundary_2_thresh[:,:,None]),axis=2)
@@ -413,18 +401,14 @@ def validate_knn(model, loader, criterion):
         down=hcat([torch_to_numpy(labels_seg),p['seg'],p_super_boundary_thresh,p['super_boundary'],4*p['super_boundary_2']])
         whole=vcat([up,down])
         whole[:,p['img'].shape[1]:p['img'].shape[1]+5,:2]=0
-        #cv2.imshow('wtf',whole)
         cv2.imwrite(args.prefix+'%d_%d.png' % (valn,i),whole)
-        cv2.imwrite(args.prefix+'%d_%d_patch.png' % (valn,i),stack_images(p['similar_patch_images']))
+        #cv2.imwrite(args.prefix+'%d_%d_patch.png' % (valn,i),stack_images(p['similar_patch_images']))
         cv2.imwrite(args.prefix+'%d_%d_hist.png' % (valn,i),stack_images(p['similar_hist_images']))
         for k in p.keys():
             try:
                 cv2.imwrite(args.prefix+'%d_%d_%s.png' % (valn,i,k),p[k])
             except:
                 pass
-        #cv2.imshow('pbound',p_boundary)
-
-        #get iou using parametric
         _,p_seg_thresh = cv2.threshold(p['seg'],20,255,cv2.THRESH_BINARY)
         p_seg_thresh/=255
         try:
@@ -433,20 +417,19 @@ def validate_knn(model, loader, criterion):
         except:
             print "Failed to run pipeline :("
             iou_pipe.append(0)
-        #cv2.imwrite('%d_%d_p_seg_thresh.png' % (valn,i),p_seg_thresh*255)
-        #cv2.imwrite('%d_%d_img_th.png' % (valn,i),(img_th*255).astype(np.uint8))
 
         print "TODO : IOU METRIC (GT, PRED)"
-        iou_l.append(iou_metric(torch_to_numpy(labels,scale=1),p['labeled']))
-        iou_el.append(iou_metric(torch_to_numpy(labels,scale=1),p['enhanced_label']))
-        iou_l2.append(iou_metric(torch_to_numpy(labels,scale=1),p['labeled2']))
-        iou_clus.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered'],print_table=True))
-        iou_clusr.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_remove']))
-        iou_elr.append(iou_metric(torch_to_numpy(labels,scale=1),p['enhanced_label_remove']))
-        iou_clusr2.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r2']))
-        iou_clusr3.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r3']))
+        #iou_l.append(iou_metric(torch_to_numpy(labels,scale=1),p['labeled']))
+        #iou_el.append(iou_metric(torch_to_numpy(labels,scale=1),p['enhanced_label']))
+        #iou_l2.append(iou_metric(torch_to_numpy(labels,scale=1),p['labeled2']))
+        #iou_clus.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered'],print_table=True))
+        #iou_clusr.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_remove']))
+        #iou_elr.append(iou_metric(torch_to_numpy(labels,scale=1),p['enhanced_label_remove']))
+        #iou_clusr2.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r2']))
+        #iou_clusr3.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r3']))
         iou_clusr4.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r4']))
-        s="\t".join(map(lambda x : str(x) , ["IOU",iou_pipe[-1],iou_l[-1],iou_l2[-1],iou_el[-1],iou_clus[-1],iou_elr[-1],iou_clusr[-1],iou_clusr2[-1],iou_clusr3[-1],iou_clusr4[-1],"\nXXXXX\n",sum(iou_pipe)/len(iou_pipe),sum(iou_l)/len(iou_l),sum(iou_l2)/len(iou_l2),sum(iou_el)/len(iou_el),sum(iou_clus)/len(iou_clus),sum(iou_elr)/len(iou_elr),sum(iou_clusr)/len(iou_clusr),sum(iou_clusr2)/len(iou_clusr2),sum(iou_clusr3)/len(iou_clusr3),sum(iou_clusr4)/len(iou_clusr4)]))
+        #s="\t".join(map(lambda x : str(x) , ["IOU",iou_pipe[-1],iou_l[-1],iou_l2[-1],iou_el[-1],iou_clus[-1],iou_elr[-1],iou_clusr[-1],iou_clusr2[-1],iou_clusr3[-1],iou_clusr4[-1],"\nXXXXX\n",sum(iou_pipe)/len(iou_pipe),sum(iou_l)/len(iou_l),sum(iou_l2)/len(iou_l2),sum(iou_el)/len(iou_el),sum(iou_clus)/len(iou_clus),sum(iou_elr)/len(iou_elr),sum(iou_clusr)/len(iou_clusr),sum(iou_clusr2)/len(iou_clusr2),sum(iou_clusr3)/len(iou_clusr3),sum(iou_clusr4)/len(iou_clusr4)]))
+        s="\t".join(map(lambda x : str(x) , ["IOU",iou_clusr4[-1],"\nXXXXX\n",sum(iou_clusr4)/len(iou_clusr4)]))
         print s
         f=open(args.prefix+'%d_%d.txt' % (valn,i),'w')
         f.write(s+'\n')
