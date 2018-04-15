@@ -25,14 +25,14 @@ def t2n(im):
 	div=255.0/max(1.0,n.max())
 	return (np.transpose(n,(1,2,0))*div).astype(np.uint8)
 
-if len(sys.argv)!=3:
-    print sys.argv[0] + "in_fn im_fn_out"
+if len(sys.argv)!=4:
+    print sys.argv[0] + "model_fn in_fn im_fn_out"
     sys.exit(1)
 
-fn=sys.argv[1]
-fn_out=sys.argv[2]
-fname='checkpoint.pth.tar'
-checkpoint = torch.load(fname, map_location='cpu') # always load to cpu first!
+model_fn=sys.argv[1]
+fn=sys.argv[2]
+fn_out=sys.argv[3]
+checkpoint = torch.load(model_fn, map_location='cpu') # always load to cpu first!
 
 
 model = UNetClassify(layers=4, init_filters=32)
