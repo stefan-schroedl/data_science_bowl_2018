@@ -11,6 +11,7 @@ import time
 import logging
 import math
 from glob import glob
+from collections import OrderedDict
 
 from tqdm import tqdm
 
@@ -244,7 +245,7 @@ def apply_criteria(data_row,
                    targets,
                    meter,
                    instance_weight_field=None,
-                   calc_iou_dset_type='train',
+                   calc_iou=False,
                    pred_field_iou='seg',
                    target_field_iou='masks_prep',
                    max_clusters_for_dilation=100):
@@ -252,7 +253,10 @@ def apply_criteria(data_row,
     """for one row of input, run the model, evaluate the criteria, and update stats"""
 
     # replicate predictions in case of single-target model
-    if not isinstance(pred, dict):
+    if not isinstance(pred, (dict, OrderedDict)):
+        if len(targets) > 1:
+            logging.warn('apparently using single-task model for multiple tasks')
+
         pred = dict([(target['name'],pred) for target in targets])
 
     # set instance weights
@@ -286,11 +290,10 @@ def apply_criteria(data_row,
 
     # calculate iou
 
-    if calc_iou_dset_type is not None:
+    if calc_iou:
         pred_seg = pred[pred_field_iou]
         for n in range(pred_seg.size()[0]):
-            pred_l, _ = postprocess_prediction(pred_seg[n], calc_iou_dset_type,
-                                               max_clusters_for_dilation=max_clusters_for_dilation)
+            pred_l, _ = postprocess_prediction(pred_seg[n], max_clusters_for_dilation=max_clusters_for_dilation)
             meter.update('iou',
                 iou_metric(data_row[target_field_iou][n].numpy().squeeze(), pred_l))
 
@@ -345,7 +348,7 @@ def validate(
                                     targets,
                                     stats,
                                     instance_weight_field=instance_weight_field,
-                                    calc_iou_dset_type=None if not calc_iou else loader.dataset.dset_type,
+                                    calc_iou=calc_iou,
                                     pred_field_iou='seg',
                                     target_field_iou='masks_prep',
                                     max_clusters_for_dilation=max_clusters_for_dilation)
@@ -366,7 +369,7 @@ def make_submission(dset, model, args, pred_field_iou='seg'):
             Variable(dev(numpy_img_to_torch(img, True)), volatile=True))
 
         pred_l, pred_seg = postprocess_prediction(
-            pred[pred_field_iou], 'test', max_clusters_for_dilation=1e20)  # highest precision
+            pred[pred_field_iou], max_clusters_for_dilation=1e20)  # highest precision
         preds.append(pred_l)
 
         if 1:
@@ -495,7 +498,7 @@ def train_cnn(train_loader,
                                         targets,
                                         stats_train,
                                         instance_weight_field=global_state['args'].instance_weights,
-                                        calc_iou_dset_type='train',
+                                        calc_iou=True,
                                         pred_field_iou='seg',
                                         target_field_iou='masks_prep',
                                         max_clusters_for_dilation=50)

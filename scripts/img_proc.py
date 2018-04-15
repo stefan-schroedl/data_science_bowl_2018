@@ -292,15 +292,14 @@ def preprocess_mask(x, dset_type):
     return x
 
 
-def postprocess_prediction(pred, dset_type, sz=2, max_clusters_for_dilation=100, thresh=0.0):
+def postprocess_prediction(pred, sz=2, max_clusters_for_dilation=100, thresh=0.0):
     # input is torch tensor of model prediction
     # output is in numpy format
     if not isinstance(pred, np.ndarray):
         pred_np = pred.data.cpu().numpy().squeeze()
     img_th = (pred_np > thresh).astype(int)
 
-    if dset_type == 'train':
-        img_th = redilate_mask(img_th, sz=sz, skip_clusters=max_clusters_for_dilation)
+    img_th = redilate_mask(img_th, sz=sz, skip_clusters=max_clusters_for_dilation)
     return img_th, pred_np
 
 
