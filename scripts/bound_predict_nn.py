@@ -137,6 +137,7 @@ for batch_id in xrange(1000000):
     if bit%100==1:
         save_checkpoint({
             'epoch': bit + 1,
+            'model':model,
             'state_dict': model.state_dict(),
             'optimizer' : optimizer.state_dict(),
         }, True)
