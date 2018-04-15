@@ -50,7 +50,11 @@ class KNN():
         self.unique_patches_idxs=[]
         self.top_patches=15
         self.similar_patches_cutoff=1
-        self.loaded_but_not_fit=False
+
+    def load(fn):
+        m=pickle.load( open(fn, "rb" ) )
+        m.fit()
+        return m
 
     def save(self,filename):
         k=KNN(self.n,self.nn,self.patch_size,self.sample,self.gauss_blur,self.similarity,self.normalize,self.super_boundary_threshold,self.erode_training_masks,self.match_method)
@@ -58,8 +62,6 @@ class KNN():
         k.histogram_numpy=self.histograms_numpy
         k.unique_patches=self.unique_patches
         k.unique_patches_numpy=self.unique_patches_numpy
-        k.loaded_but_not_fit=True
-
         output=open(filename, 'wb')
         pickle.dump(k, output, pickle.HIGHEST_PROTOCOL)
 
