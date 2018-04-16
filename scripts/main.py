@@ -948,6 +948,7 @@ def main():
     parser.add('--knn-similarity', type=int, default=0, help="similarity")
     parser.add('--knn-normalize', type=int, default=1, help="normalize")
     parser.add('--knn-bright-skip', type=int, default=253, help="bright skip")
+    parser.add('--knn-enhance-its', type=int, default=5, help="enhance its")
 
 
     print sys.argv
@@ -1020,7 +1021,7 @@ def main():
     print "HERE",args.model
     if args.model in ('knn',):
         trainer=train_knn
-        model=KNN(patch_size=args.patch_size,n=args.knn_n,super_boundary_threshold=args.super_boundary_threshold,match_method=args.knn_method,weird_mean=args.knn_weird_mean,similarity=args.knn_similarity,normalize=args.knn_normalize,bright_skip=args.knn_bright_skip)
+        model=KNN(patch_size=args.patch_size,n=args.knn_n,super_boundary_threshold=args.super_boundary_threshold,match_method=args.knn_method,weird_mean=args.knn_weird_mean,similarity=args.knn_similarity,normalize=args.knn_normalize,bright_skip=args.knn_bright_skip,enhance_its=args.knn_enhance_its)
     elif args.model in ('guess',):
         trainer=train_knn
         model=GUESS()

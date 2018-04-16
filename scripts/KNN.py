@@ -14,13 +14,14 @@ import cPickle as pickle
 class KNN():
     def eval():
         return 
-    def __init__(self,n=5,hist_n=10,patch_size=13,sample=400,gauss_blur=False,similarity=0,normalize=1,super_boundary_threshold=20,erode=False,match_method='hist',weird_mean=100,bright_skip=253):
+    def __init__(self,n=5,hist_n=10,patch_size=13,sample=400,gauss_blur=False,similarity=0,normalize=1,super_boundary_threshold=20,erode=False,match_method='hist',weird_mean=100,bright_skip=253,enhance_its=5):
         print "SAMPLE IS ",sample, "SHOULD BE ~400?"
         print "TRY TO START WITH SUPER BOUNDARY INSTEAD OF JUST BOUNDARY>????"
         print "http://answers.opencv.org/question/60974/matching-shapes-with-hausdorff-and-shape-context-distance/"
         print "LOG SIMILAR IMAGES!!!"
         print "TRY TO RECONSTRUCT RECURSIVELY?"
         #sys.exit(1)
+        self.enhance_its=enhance_its
         self.n=n # nearest patches to average
         self.nn=hist_n # nearest images to use as training
         self.super_boundary_threshold=super_boundary_threshold
@@ -368,7 +369,7 @@ class KNN():
         reconstructed=super_boundary.copy()
 	gkernel=cv2.getGaussianKernel(ksize=self.boundary_patch_size,sigma=1)
 	gkernel=(gkernel*gkernel.T).reshape(-1)
-        for xx in range(5): #DO 5!!!
+        for xx in range(self.enhance_its): #DO 5!!!
             print "ENHANCE",xx
             r=self.reconstruct(reconstructed,self.patches_super_boundary_numpy,self.boundary_patch_size,self.super_boundary_model)
             #take out border artifacts
@@ -430,12 +431,15 @@ class KNN():
             nxt,prv,child,parent = hierarchy[0][cur]
             if child==-1 and a<0.3: #True: # and len(children[cur])<=2:
                 cv2.fillPoly(l, [contours[cur]], int(idx))
+                print "SIZE",(l==idx).sum()
                 if img.ndim==3 and img[l==idx].mean()>self.bright_skip:
                     l[l==idx]=0
                     #cv2.drawContours(img3,[contours[cur]],0,color,2)
                     #cv2.imshow('wtf',img3)
                     #print "SKIP BRIGHT"
                     #cv2.waitKey(500000)
+                elif (l==idx).sum()<7: # if its too small drop it
+                    l[l==idx]=0
                 elif seg[l==x].mean()<100:
                     l[l==idx]=1
                 else:
@@ -458,17 +462,17 @@ class KNN():
         #cv2.imshow('img3',img3.astype(np.uint8))
         #cv2.waitKey(3)
         water=True
-        seg_mask = cv2.threshold(seg, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
-        cv2.imshow('seg_mask',seg_mask)
-        cv2.imshow('l',self.color_label(l))
+        #seg_mask = cv2.threshold(seg, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
+        #cv2.imshow('seg_mask',seg_mask)
+        #cv2.imshow('l',self.color_label(l))
         if water:
             l=l.astype(np.int32)
             #l[l==0]=1
             l[seg<10]=1
             l=cv2.watershed(cv2.cvtColor(seg, cv2.COLOR_GRAY2BGR),l)-1
             l[l<0]=0 # set bg and unknown to 0
-        cv2.imshow('lwater',self.color_label(l))
-        cv2.waitKey(500000)
+        #cv2.imshow('lwater',self.color_label(l))
+        #cv2.waitKey(500000)
         #for x in xrange(l.max()+1):
         #    print "LABEL",x,(l==x).sum()
         #sys.exit(1)
