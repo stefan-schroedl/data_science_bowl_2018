@@ -518,14 +518,23 @@ def make_submission(dset, model, args, pred_field_iou='seg'):
     preds = []
     for i in tqdm(range(len(dset.data_df))):
         img = dset.data_df[args.input_field].iloc[i]
-        pred = model(
-            Variable(dev(numpy_img_to_torch(img, True)), volatile=True))
+        pred=None
+        if model.predict!=None:
+            print type(numpy_img_to_torch(img)) 
+            p = model.predict(
+                numpy_img_to_torch(img, True))
+            l = parametric_pipeline(p['seg'], circle_size=4,use_watershed=False)
+            #l_th=numpy_img_to_torch(l)
+            preds.append(l)
+        else:
+            pred = model(
+                Variable(dev(numpy_img_to_torch(img, True)), volatile=True))
+            pred_l, pred_seg = postprocess_prediction(
+                pred[pred_field_iou], max_clusters_for_dilation=1e20)  # highest precision
+            preds.append(pred_l)
 
-        pred_l, pred_seg = postprocess_prediction(
-            pred[pred_field_iou], max_clusters_for_dilation=1e20)  # highest precision
-        preds.append(pred_l)
 
-        if 1:
+        if 0:
             fig, ax = plt.subplots(1, len(pred)+1, figsize=(50, 50))
             plt.tight_layout()
             ax[0].title.set_text('img')
@@ -589,6 +598,7 @@ def train_knn(
         cnt = cnt + 1
         if cnt > 0 and global_state['it'] % eval_every == 0:
             model.fit()
+            model.save('knn.pkl')
             l = validate_knn(model, valid_loader, criterion)
             insert_log(global_state['it'], 'train_loss', running_loss / cnt)
             insert_log(global_state['it'], 'valid_loss', l)
@@ -1045,19 +1055,23 @@ def main():
         raise ValueError('--resume must be specified')
 
     if args.resume is not None:
-        model = load_checkpoint(
-            checkpoint_file_from_dir(
-                args.resume), model, None, global_state)
-        # make sure args here is consistent with possibly updated
-        # global_state['args']!
-        args = global_state['args']
+        if args.model in ('cnn',):
+            model = load_checkpoint(
+                checkpoint_file_from_dir(
+                    args.resume), model, None, global_state)
+            # make sure args here is consistent with possibly updated
+            # global_state['args']!
+            args = global_state['args']
 
-        # if targets from model are not overriden, reparsing is necessary
-        if 'targets' not in args.override_model_opts:
-            targets = parse_targets(args)
+            # if targets from model are not overriden, reparsing is necessary
+            if 'targets' not in args.override_model_opts:
+                targets = parse_targets(args)
 
-        args.force_overwrite = 1
-        model = dev(model)
+            args.force_overwrite = 1
+            model = dev(model)
+        elif args.model in ('knn',):
+            model = KNN.load('knn.pkl')
+            print "LOADED KNN MODEL!",model
     else:
         # prevent accidental overwriting
         ckpt_file = get_checkpoint_file(args)
@@ -1150,6 +1164,7 @@ def main():
     # make submission file
 
     if args.do == 'submit':
+        print "MAKE RETURN"
         make_submission(dset, model, args)
         return
 

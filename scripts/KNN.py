@@ -12,7 +12,7 @@ from GUESS import *
 import cPickle as pickle
 
 class KNN():
-    def eval():
+    def eval(self):
         return 
 
     def load_config(self,config):
@@ -45,7 +45,8 @@ class KNN():
     def parameters(self):
         return []
 
-    def load(fn):
+    @classmethod
+    def load(cls,fn):
         m=pickle.load( open(fn, "rb" ) )
         m.fit()
         return m
@@ -54,6 +55,7 @@ class KNN():
         k=KNN(self.config)
         k.histograms=self.histograms
         k.histogram_numpy=self.histograms_numpy
+        k.images=self.images
         #k.unique_patches=self.unique_patches
         #k.unique_patches_numpy=self.unique_patches_numpy
         output=open(filename, 'wb')
@@ -715,7 +717,8 @@ class KNN():
     def predict(self,img,gt=None):
         #self.save('out_model.pkl')
 	img = (img.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
-	gt = (gt.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
+        if gt is not None:
+	    gt = (gt.numpy()[0].transpose(1,2,0)*255).astype(np.uint8)
 
         similar_hist_images=[]
         similar_hist_images_idxs=self.similar_by_hist(img)
@@ -808,7 +811,8 @@ class KNN():
         d['clustered_ro']=self.remove_overlap(d['clustered'])
         d['clustered_r4']=self.shrink_nuclei(d['clustered'])
         d['clustered_r4_remove']=self.water(self.shrink_nuclei(d['clustered'])+1,reconstructed_mask)
-	d['gt']=gt
+        if gt is not None:
+	    d['gt']=gt
 	for x in ['clustered','clustered_r4','clustered_r4_remove','enhanced_label','clustered_ro','enhanced_label_ro','clustered_d','clustered_d_ro','clustered_dd']:
 		d["color_"+x]=self.color_label(d[x])
                 print "FOUND NUCLEI",x,d[x].max()
