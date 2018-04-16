@@ -14,47 +14,33 @@ import cPickle as pickle
 class KNN():
     def eval():
         return 
-    def __init__(self,n=5,hist_n=10,patch_size=13,sample=400,gauss_blur=False,similarity=0,normalize=1,super_boundary_threshold=20,erode=False,match_method='hist',weird_mean=100,bright_skip=253,enhance_its=5):
-        print "SAMPLE IS ",sample, "SHOULD BE ~400?"
+
+    def load_config(self,config):
+        self.config={'n':5,'hist_n':10,'patch_size':13,'sample':400,'gauss_blur':False,'similarity':0,'normalize':1,'super_boundary_threshold':20,'erode':False,'match_method':'hist','weird_mean':100,'bright_skip':253,'enhance_its':5,'cutoff':1e5,'boundary_cutoff':1,'channels':8,'boundary_blur':9,'boundary_patch_size':13}
+        for key in self.config.keys():
+            if key in config:
+                self.config[key]=config[key]
+	gkernel=cv2.getGaussianKernel(ksize=self.config['patch_size'],sigma=1)
+	gkernel=gkernel*gkernel.T
+	gkernel=gkernel.reshape(self.config['patch_size'],self.config['patch_size'],1)
+	gkernel=np.concatenate((gkernel,gkernel,gkernel,gkernel,gkernel,gkernel),axis=2)
+	gkernel=gkernel.reshape(-1)*self.config['patch_size']*self.config['patch_size']
+        self.gkernel=gkernel
+    def __init__(self,config):
+        #self,n=5,hist_n=10,patch_size=13,sample=400,gauss_blur=False,similarity=0,normalize=1,super_boundary_threshold=20,erode=False,match_method='hist',weird_mean=100,bright_skip=253,enhance_its=5):
+        self.load_config(config)
+        print "SAMPLE IS ",self.config['sample'], "SHOULD BE ~400?"
         print "TRY TO START WITH SUPER BOUNDARY INSTEAD OF JUST BOUNDARY>????"
         print "http://answers.opencv.org/question/60974/matching-shapes-with-hausdorff-and-shape-context-distance/"
         print "LOG SIMILAR IMAGES!!!"
         print "TRY TO RECONSTRUCT RECURSIVELY?"
         #sys.exit(1)
-        self.enhance_its=enhance_its
-        self.n=n # nearest patches to average
-        self.nn=hist_n # nearest images to use as training
-        self.super_boundary_threshold=super_boundary_threshold
-        self.cutoff=1e5
-        self.boundary_cutoff=1 #50
-        self.channels=8
-        self.boundary_blur=9 #9
-        self.patch_size=patch_size
-        self.boundary_patch_size=13
-        self.bright_skip=bright_skip
         #self.model =  KNeighborsClassifier(n_neighbors=n,n_jobs=-1,algorithm='kd_tree') 
-        self.sample = sample
-        self.weird_mean=weird_mean
         self.patches = [] #np.array([]) 
         self.patches_3d = [] #np.array([])
         self.histograms = []
         self.images = []
-	self.normalize = normalize==1
-	gkernel=cv2.getGaussianKernel(ksize=patch_size,sigma=1)
-	gkernel=gkernel*gkernel.T
-	gkernel=gkernel.reshape(patch_size,patch_size,1)
-	gkernel=np.concatenate((gkernel,gkernel,gkernel,gkernel,gkernel,gkernel),axis=2)
-	gkernel=gkernel.reshape(-1)*self.patch_size*self.patch_size
-        self.gkernel=gkernel
-        self.similarity=(similarity==1)
-        self.gauss_blur=gauss_blur
-        self.match_method=match_method
         self.img_sig=set([])
-        self.erode_training_masks=erode
-        #self.unique_patches=[]
-        #self.unique_patches_idxs=[]
-        #self.top_patches=15
-        self.similar_patches_cutoff=1
 
     def parameters(self):
         return []
@@ -65,7 +51,7 @@ class KNN():
         return m
 
     def save(self,filename):
-        k=KNN(self.n,self.nn,self.patch_size,self.sample,self.gauss_blur,self.similarity,self.normalize,self.super_boundary_threshold,self.erode_training_masks,self.match_method)
+        k=KNN(self.config)
         k.histograms=self.histograms
         k.histogram_numpy=self.histograms_numpy
         #k.unique_patches=self.unique_patches
@@ -153,55 +139,18 @@ class KNN():
 
     def get_top_patches(self,img,how_many=None):
         if how_many==None:
-            how_many=self.sample
+            how_many=self.config['sample']
         #get patches for similarity compare
         data_patches=None
         if how_many>0:
-            data_patches = extract_patches_2d(img, (self.patch_size,self.patch_size) ,random_state=1000, max_patches=how_many).astype(np.float64)
+            data_patches = extract_patches_2d(img, (self.config['patch_size'],self.config['patch_size']) ,random_state=1000, max_patches=how_many).astype(np.float64)
         else:
-            data_patches = extract_patches_2d(img, (self.patch_size,self.patch_size) ,random_state=1000).astype(np.float64)
+            data_patches = extract_patches_2d(img, (self.config['patch_size'],self.config['patch_size']) ,random_state=1000).astype(np.float64)
         data_patches = data_patches.reshape(data_patches.shape[0],-1)
         stds=data_patches.std(axis=1).argsort()[-self.top_patches:]
         data_patches = data_patches.take(stds,axis=0)
         return data_patches/255
 
-    def similar_by_patches(self,img):
-        top_patches = self.get_top_patches(img)
-        similar_images_idxs=[]
-        print "SEARCH NEARTEST PATCHES"
-        hits={}
-        hits_full={}
-        nearest_wds=self.unique_model.search(top_patches.astype(np.float32), (self.n*max(self.top_patches,4))/4)
-	for x in xrange(top_patches.shape[0]):
-	    idxs=nearest_wds[1][x]
-	    dists=nearest_wds[0][x]
-            #print dists.min(),dists.mean(),dists.max()
-            #idxs=idxs[idxs>=0]
-            for y in xrange(len(idxs)):
-                idx=idxs[y]
-                if idx<0:
-                    continue
-                dist=dists[y]
-                idx=self.unique_patches_idxs_numpy[idx]
-                if dist<self.similar_patches_cutoff:
-                    if idx not in hits:
-                        hits[idx]=0
-                    hits[idx]+=1
-                if idx not in hits_full:
-                    hits_full[idx]=0
-                hits_full[idx]+=1
-
-        if len(hits)==0:
-            hits=hits_full # back off 'gracefully'
-        keys=[]
-        for key in hits:
-            if len(keys)>=self.nn:
-                break
-            keys.append((hits[key],key))
-        keys.sort(reverse=True)
-
-        similar_img_idxs=[ k[1] for k in keys ]
-        return similar_img_idxs
 
         
     def fit(self):
@@ -239,13 +188,13 @@ class KNN():
                     #data_patches = extract_patches_2d(stacked_img, (self.patch_size,self.patch_size) ,random_state=1000,max_patches=self.sample).astype(np.float64)
                     data_patches=None
                     if use_all:
-                        data_patches = extract_patches_2d(stacked_img, (self.patch_size,self.patch_size) ,random_state=1000).astype(np.float64)
+                        data_patches = extract_patches_2d(stacked_img, (self.config['patch_size'],self.config['patch_size']) ,random_state=1000).astype(np.float64)
                     else:
-                        data_patches = extract_patches_2d(stacked_img, (self.patch_size,self.patch_size) ,random_state=1000,max_patches=self.sample).astype(np.float64)
+                        data_patches = extract_patches_2d(stacked_img, (self.config['patch_size'],self.config['patch_size']) ,random_state=1000,max_patches=self.config['sample']).astype(np.float64)
                     total_patches+=data_patches.shape[0]
                     self.patches.append(data_patches.reshape(-1))
                     data_patches_3d = data_patches[:,:,:,:3].copy().reshape(data_patches.shape[0], -1).astype(np.float32)
-                    if self.normalize:
+                    if self.config['normalize']:
                         data_patches_3d -= np.mean(data_patches_3d, axis=0)
                         data_patches_3d /= np.std(data_patches_3d, axis=0)
                     self.patches_3d.append(data_patches_3d.reshape(-1))
@@ -273,25 +222,25 @@ class KNN():
                         imgs_to_use=[super_boundary,boundary,np.maximum(super_boundary,boundary)]
                         for img_to_use in imgs_to_use:
                             #add regular patches
-                            img_to_use_blurred=cv2.GaussianBlur(img_to_use,(self.boundary_blur,self.boundary_blur),0)
-                            mask_patches = extract_patches_2d(img_to_use_blurred, (self.boundary_patch_size,self.boundary_patch_size) ,random_state=1000,max_patches=self.sample).astype(np.float64)
+                            img_to_use_blurred=cv2.GaussianBlur(img_to_use,(self.config['boundary_blur'],self.config['boundary_blur']),0)
+                            mask_patches = extract_patches_2d(img_to_use_blurred, (self.config['boundary_patch_size'],self.config['boundary_patch_size']) ,random_state=1000,max_patches=self.config['sample']).astype(np.float64)
                             mask_patches = mask_patches.reshape(mask_patches.shape[0], -1)
                             #there are patches that have a max of 0 or 1 , which results just in a solid white or black patch?
-                            mask_patches = mask_patches[mask_patches.max(axis=1)>self.boundary_cutoff]
+                            mask_patches = mask_patches[mask_patches.max(axis=1)>self.config['boundary_cutoff']]
                             mask_patches = (mask_patches / mask_patches.max(axis=1)[:,None])*255
                             self.patches_super_boundary.append(mask_patches)
     
         #generate the patch index
-        c=self.patch_size*self.patch_size*self.channels
+        c=self.config['patch_size']*self.config['patch_size']*self.config['channels']
         self.patches_numpy = np.reshape(self.patches, newshape=(total_patches, c))
 
-        c=self.patch_size*self.patch_size*3
+        c=self.config['patch_size']*self.config['patch_size']*3
         self.patches_3d_numpy = np.reshape(self.patches_3d, newshape=(total_patches, c))
 
         model = faiss.IndexFlatL2(self.patches_3d_numpy.shape[1])
         model.add(self.patches_3d_numpy.astype(np.float32))
 
-        c=self.boundary_patch_size*self.boundary_patch_size*1
+        c=self.config['boundary_patch_size']*self.config['boundary_patch_size']*1
         self.patches_super_boundary_numpy = np.concatenate(self.patches_super_boundary,axis=0)
         super_boundary_model = faiss.IndexFlatL2(self.patches_super_boundary_numpy.shape[1])
         super_boundary_model.add(self.patches_super_boundary_numpy.astype(np.float32))
@@ -309,7 +258,7 @@ class KNN():
             patches = extract_patches_2d(img, (patch_size,patch_size)).astype(np.float64)
             patches = patches.reshape(patches.shape[0], -1)
 
-            nearest_wds=model.search(patches.astype(np.float32), self.n)
+            nearest_wds=model.search(patches.astype(np.float32), self.config['n'])
             knn_patches=np.array([])
             for x in xrange(patches.shape[0]):
                 idxs=nearest_wds[1][x]
@@ -321,7 +270,7 @@ class KNN():
                 if knn_patches.ndim==1:
                     knn_patches=np.zeros((patches.shape[0],new_patch.shape[0]))
                 knn_patches[x]=new_patch
-            knn_patches = knn_patches.reshape(knn_patches.shape[0], *(self.boundary_patch_size,self.boundary_patch_size))
+            knn_patches = knn_patches.reshape(knn_patches.shape[0], *(self.config['boundary_patch_size'],self.config['boundary_patch_size']))
             #add in some original :) 
             r= reconstruct_from_patches_2d( knn_patches, (height, width)).astype(np.uint8)
             return r
@@ -367,11 +316,11 @@ class KNN():
         #super_boundary=((super_boundary.astype(np.float32)/super_boundary.max())*255).astype(np.uint8)
         #_,super_boundary = cv2.threshold(super_boundary,50,255,cv2.THRESH_BINARY)
         reconstructed=super_boundary.copy()
-	gkernel=cv2.getGaussianKernel(ksize=self.boundary_patch_size,sigma=1)
+	gkernel=cv2.getGaussianKernel(ksize=self.config['boundary_patch_size'],sigma=1)
 	gkernel=(gkernel*gkernel.T).reshape(-1)
-        for xx in range(self.enhance_its): #DO 5!!!
+        for xx in range(self.config['enhance_its']): #DO 5!!!
             print "ENHANCE",xx
-            r=self.reconstruct(reconstructed,self.patches_super_boundary_numpy,self.boundary_patch_size,self.super_boundary_model)
+            r=self.reconstruct(reconstructed,self.patches_super_boundary_numpy,self.config['boundary_patch_size'],self.super_boundary_model)
             #take out border artifacts
             r[:2,:]=0
             r[-2:,:]=0
@@ -432,7 +381,7 @@ class KNN():
             if child==-1 and a<0.3: #True: # and len(children[cur])<=2:
                 cv2.fillPoly(l, [contours[cur]], int(idx))
                 print "SIZE",(l==idx).sum()
-                if img.ndim==3 and img[l==idx].mean()>self.bright_skip:
+                if img.ndim==3 and img[l==idx].mean()>self.config['bright_skip']:
                     l[l==idx]=0
                     #cv2.drawContours(img3,[contours[cur]],0,color,2)
                     #cv2.imshow('wtf',img3)
@@ -546,7 +495,7 @@ class KNN():
 	return burred_boundary
 
     def by_cluster(self,img,reconstructed):
-        assert(reconstructed.shape[2]==self.channels)
+        assert(reconstructed.shape[2]==self.config['channels'])
         img=img.copy()
         height,width,_=img.shape
 	reconstructed_img = reconstructed[:,:,:3].astype(np.uint8)
@@ -556,13 +505,12 @@ class KNN():
 	reconstructed_super_boundary_2 = reconstructed[:,:,7].astype(np.uint8)
 
         _,reconstructed_mask_thresh = cv2.threshold(reconstructed_mask,50,255,cv2.THRESH_BINARY)
-	cv2.imshow('reconstructed mask thresh',reconstructed_mask)
-
 
         _, contours, hierarchy = cv2.findContours(reconstructed_mask_thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 	print "CONTOURS",len(contours)
         marking_idx=2
-        labels=np.ones_like(reconstructed_mask).astype(np.int32)
+        labels=np.zeros_like(reconstructed_mask).astype(np.int32)
+        labels[reconstructed_mask==0]=255
 
         #rbt = cv2.threshold(reconstructed_boundary, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
         #rsbt = cv2.threshold(reconstructed_super_boundary, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
@@ -583,14 +531,16 @@ class KNN():
         #cv2.waitKey(50000)
 
 	#orig
-        enhanced=self.enhance(self.img_normalize(reconstructed_super_boundary),self.img_normalize(reconstructed_super_boundary_2))
+        #enhanced=self.enhance(self.img_normalize(reconstructed_super_boundary),self.img_normalize(reconstructed_super_boundary_2))
         #_,enhanced_thresh=cv2.threshold(enhanced,80,255,cv2.THRESH_BINARY)
 
-        #enhanced=self.enhance(self.img_normalize(reconstructed_boundary),self.img_normalize(reconstructed_super_boundary_2))
-        _,enhanced_thresh=cv2.threshold(enhanced,80,255,cv2.THRESH_BINARY)
+        enhanced=self.enhance(self.img_normalize(reconstructed_boundary),self.img_normalize(reconstructed_super_boundary_2))
+        #_,enhanced_thresh=cv2.threshold(enhanced,100,255,cv2.THRESH_BINARY)
+        #cv2.imshow('enhanced_thresh',enhanced_thresh)
+        #cv2.waitKey(5000000)
 	
         #_,enhanced_thresh=self.get_thresh(enhanced)
-        enhanced_thresh=-enhanced_thresh+255
+        #enhanced_thresh=-enhanced_thresh+255
 
         #enot = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
         #cv2.imshow('enhanced',enhanced)
@@ -606,13 +556,21 @@ class KNN():
             roi_mask = np.zeros_like(reconstructed_mask)[:,:,None]
             cv2.fillPoly(roi_mask, [contours[x]], 1)
             roi = np.multiply(reconstructed,roi_mask)
+            roi_enhanced = np.multiply(enhanced[:,:,None],roi_mask)
+            roi_enhanced_otsu = self.get_thresh(roi_enhanced)[1]
             roi_img = roi[:,:,:3].astype(np.uint8)
 	    rect = cv2.minAreaRect(contours[x])
             roi_mask = roi[:,:,3].astype(np.uint8)
             roi_boundary = roi[:,:,4].astype(np.uint8)
             roi_boundary_otsu = self.get_thresh(roi_boundary)[1]
 
-            roi_enhanced_thresh=np.multiply(roi_mask,enhanced_thresh)
+            #roi_enhanced_thresh=np.multiply(roi_mask,enhanced_thresh)
+            roi_enhanced_thresh=roi_mask.copy()
+            roi_enhanced_thresh[roi_enhanced_otsu>170]=0
+            #roi_enhanced_thresh = cv2.dilate(roi_enhanced_thresh,  (3,3), iterations=1)
+
+
+
             #cv2.imshow('roi mask',roi_mask)
 	    #cv2.imshow('roi',roi_enhanced_thresh)
 	    #cv2.imshow('roi_boundaruy',roi_boundary)
@@ -624,7 +582,10 @@ class KNN():
                 for roi_x in xrange(len(roi_contours)):
                     color = np.random.randint(0,255,(3)).tolist() 
                     cv2.fillPoly(labels, [roi_contours[roi_x]], int(marking_idx))
-                    marking_idx+=1
+                    if (labels==marking_idx).sum()>7:
+                        marking_idx+=1
+                    else:
+                        labels[labels==marking_idx]=0
 		    #if len(roi_contours)>1:
                     #	r=cv2.drawContours(roi_img,[roi_contours[roi_x]],0,color,2)
 		    #    cv2.imshow('r',r)
@@ -634,9 +595,28 @@ class KNN():
                 #cv2.drawContours(roi_img,[contours[x]],0,color,2)
                 cv2.fillPoly(labels, [contours[x]], int(marking_idx))
                 marking_idx+=1
-        water=cv2.watershed(cv2.cvtColor(reconstructed_mask, cv2.COLOR_GRAY2BGR),labels)-1
-        water[water<0]=0 # set bg and unknown to 0
+            #cv2.waitKey(500000)
+        water=self.water(labels,reconstructed_mask)
+        #cv2.imshow('color water',self.color_label(water))
+        #for x in xrange(water.max()+1):
+        #    print "WATER",x,(water==x).sum()
+        #cv2.waitKey(500000)
         return enhanced,water
+
+    def water(self,labels,seg):
+        labels=labels.copy()
+        offset=0
+        for x in xrange(1,labels.max()):
+            idx=x+1
+            if (labels==idx).sum()<7:
+                offset+=1
+                labels[idx]==0
+            else:
+                labels[labels==idx]=idx-offset
+        _,seg_thresh=cv2.threshold(seg,40,255,cv2.THRESH_BINARY)
+        water=cv2.watershed(cv2.cvtColor(seg_thresh, cv2.COLOR_GRAY2BGR),labels)-1
+        water[water<0]=0 # set bg and unknown to 0
+        return water
 
     def guess_prepare(self,image_idxs):
         self.guess=GUESS()
@@ -650,13 +630,13 @@ class KNN():
         hist = self.get_hist(img)
         similar_images_idxs=[]
         print "SEARCH NEARTEST HIST"
-        nearest_wds=self.histogram_model.search(hist[None,:].astype(np.float32), self.nn)
+        nearest_wds=self.histogram_model.search(hist[None,:].astype(np.float32), self.config['hist_n'])
         for x in xrange(len(nearest_wds[1][0])):
             idx=nearest_wds[1][0][x]
             if idx==-1:
                 continue
             dist=nearest_wds[0][0][x]
-            if dist<self.cutoff:
+            if dist<self.config['cutoff']:
                 similar_images_idxs.append(idx)
         if len(similar_images_idxs)==0:
             similar_images_idxs=nearest_wds[1][0]
@@ -673,6 +653,9 @@ class KNN():
             cur_mask[labels==idx]=255
             cur_mask = cv2.erode(cur_mask, kernel, iterations=1)
             if cur_mask.sum()<100:
+                #print "SKIP LABEL"
+                #cv2.imshow('cur_mask',cur_mask)
+                #cv2.waitKey(500000)
                 offset+=1
             else:
                 labels_new[cur_mask>100]=idx-offset
@@ -722,7 +705,7 @@ class KNN():
         offset=0
         for x in xrange(l.max()):
             idx=x+1
-            if l[l==idx].sum()<1 or mask[l==idx].mean()<self.weird_mean:
+            if l[l==idx].sum()<7 or mask[l==idx].mean()<self.config['weird_mean']:
                 l[l==idx]=0
                 offset+=1
             else:
@@ -743,7 +726,7 @@ class KNN():
 
         patch_model = None
         super_boundary_model = None
-        if self.match_method=='hist':
+        if self.config['match_method']=='hist':
             patch_model,self.super_boundary_model, self.super_boundary_2_model = self.make_index(similar_hist_images_idxs) #,use_all=True)
         else:
             print "INVALID MODEL TYPE"
@@ -758,12 +741,12 @@ class KNN():
         for reconstruct_it in xrange(1):
             print "RECONSTRUCTING", reconstruct_it
             height,width,channels = img.shape
-            img_patches = extract_patches_2d(img, (self.patch_size,self.patch_size)).astype(np.float64)
+            img_patches = extract_patches_2d(img, (self.config['patch_size'],self.config['patch_size'])).astype(np.float64)
             img_patches = img_patches.reshape(img_patches.shape[0], -1).astype(np.float32)
-            if self.normalize:
+            if self.config['normalize']:
                 img_patches -= np.mean(img_patches, axis=0)
                 img_patches /= np.std(img_patches, axis=0)
-            nearest_wds=patch_model.search(img_patches.astype(np.float32), self.n)
+            nearest_wds=patch_model.search(img_patches.astype(np.float32), self.config['n'])
             knn_patches=np.array([])
             print "START IMG PATCH GEN - STEP 2"
             for x in xrange(img_patches.shape[0]):
@@ -774,21 +757,21 @@ class KNN():
                 new_patch=self.patches_numpy[idxs].mean(axis=0)
                 #new_patch=np.median(self.patches_numpy[idxs],axis=0)
                 #use similarity
-                if self.similarity:
+                if self.config['similarity']:
                     distances=nearest_wds[0][x]
                     similarity=1.0/distances
                     similarity/=similarity.sum()
                     new_patch=(self.patches_numpy[idxs]*similarity[:,np.newaxis]).sum(axis=0)
                 #gaussian spread
-                if self.gauss_blur:
+                if self.config['gauss_blur']:
                     new_patch=np.multiply(new_patch,self.gkernel)
 
                 if knn_patches.ndim==1:
                     knn_patches=np.zeros((img_patches.shape[0],new_patch.shape[0]))
                 knn_patches[x]=new_patch
             print "START RECONSTRUCT"
-            knn_patches = knn_patches.reshape(knn_patches.shape[0], *(self.patch_size,self.patch_size,self.channels))
-            reconstructed = reconstruct_from_patches_2d( knn_patches, (height, width,self.channels))
+            knn_patches = knn_patches.reshape(knn_patches.shape[0], *(self.config['patch_size'],self.config['patch_size'],self.config['channels']))
+            reconstructed = reconstruct_from_patches_2d( knn_patches, (height, width,self.config['channels']))
             reconstructed_img = reconstructed[:,:,:3].astype(np.uint8)
             img=reconstructed_img.copy()
 	reconstructed_mask = reconstructed[:,:,3].astype(np.uint8)
@@ -799,7 +782,7 @@ class KNN():
 	#reconstructed_mask_eroded = reconstructed[:,:,7].astype(np.uint8)
 
         enhanced,clustered=self.by_cluster(img,reconstructed)
-        _,enhanced_thresh = cv2.threshold(enhanced,self.super_boundary_threshold*4,255,cv2.THRESH_BINARY)
+        _,enhanced_thresh = cv2.threshold(enhanced,self.config['super_boundary_threshold']*4,255,cv2.THRESH_BINARY)
         enhanced_label = self.label(enhanced_thresh,reconstructed_mask).astype(np.int32)
         enhanced_label[enhanced_label<0]=0
         enhanced_label=enhanced_label.astype(np.uint8)
@@ -820,12 +803,13 @@ class KNN():
         d['similar_hist_images']=similar_hist_images
 	d['clustered']=self.remove_weird_labels(clustered,reconstructed_mask)
 	d['clustered_d']=self.dilate_masks(d['clustered'])
+	d['clustered_dd']=self.dilate_masks(d['clustered_d'])
 	d['clustered_d_ro']=self.remove_overlap(self.dilate_masks(d['clustered']))
         d['clustered_ro']=self.remove_overlap(d['clustered'])
         d['clustered_r4']=self.shrink_nuclei(d['clustered'])
-        d['clustered_r4_remove']=self.shrink_nuclei(d['clustered'])
+        d['clustered_r4_remove']=self.water(self.shrink_nuclei(d['clustered'])+1,reconstructed_mask)
 	d['gt']=gt
-	for x in ['clustered','clustered_r4','clustered_r4_remove','enhanced_label','clustered_ro','enhanced_label_ro','clustered_d','clustered_d_ro']:
+	for x in ['clustered','clustered_r4','clustered_r4_remove','enhanced_label','clustered_ro','enhanced_label_ro','clustered_d','clustered_d_ro','clustered_dd']:
 		d["color_"+x]=self.color_label(d[x])
                 print "FOUND NUCLEI",x,d[x].max()
         return d 

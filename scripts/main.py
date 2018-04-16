@@ -252,7 +252,7 @@ def stack_images(imgs,w=5):
 
 
 valn=0
-ious={'pipe':[],'e':[],'pipe_seg':[],'clusr4':[],'clusrr4':[],'clusr_ro':[],'e_ro':[],'clusr_d':[],'clusr_d_ro':[]}
+ious={'pipe':[],'e':[],'pipe_water':[],'clusr4':[],'clusrr4':[],'clusr_ro':[],'e_ro':[],'clusr_d':[],'clusr_d_ro':[],'clusr_dd':[]}
 
 def validate_knn(model, loader, criterion):
     running_loss = 0.0
@@ -294,7 +294,7 @@ def validate_knn(model, loader, criterion):
         p_seg_thresh/=255
 
         img_th = parametric_pipeline(np.minimum(255-p['boundary'],p['seg']), circle_size=4)
-        img_th_seg = parametric_pipeline(p['seg'], circle_size=4)
+        img_th_seg = parametric_pipeline(p['seg'], circle_size=4,use_watershed=True)
         
 
         print "TODO : IOU METRIC (GT, PRED)"
@@ -310,10 +310,11 @@ def validate_knn(model, loader, criterion):
         ious['clusr4'].append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r4'][:,:,None]))
         ious['clusrr4'].append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r4_remove'][:,:,None]))
         ious['pipe'].append(iou_metric(torch_to_numpy(labels,scale=1),img_th[:,:,None]))
-        ious['pipe_seg'].append(iou_metric(torch_to_numpy(labels,scale=1),img_th_seg[:,:,None]))
+        ious['pipe_water'].append(iou_metric(torch_to_numpy(labels,scale=1),img_th_seg[:,:,None]))
         ious['e'].append(iou_metric(torch_to_numpy(labels,scale=1),p['enhanced_label'][:,:,None]))
         ious['clusr_ro'].append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_ro'][:,:,None]))
         ious['clusr_d'].append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_d'][:,:,None]))
+        ious['clusr_dd'].append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_dd'][:,:,None]))
         ious['clusr_d_ro'].append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_d_ro'][:,:,None]))
         ious['e_ro'].append(iou_metric(torch_to_numpy(labels,scale=1),p['enhanced_label_ro'][:,:,None]))
         #iou_clusr4.append(iou_metric(labels.numpy().squeeze(),p['clustered_r4']))
@@ -1021,7 +1022,7 @@ def main():
     print "HERE",args.model
     if args.model in ('knn',):
         trainer=train_knn
-        model=KNN(patch_size=args.patch_size,n=args.knn_n,super_boundary_threshold=args.super_boundary_threshold,match_method=args.knn_method,weird_mean=args.knn_weird_mean,similarity=args.knn_similarity,normalize=args.knn_normalize,bright_skip=args.knn_bright_skip,enhance_its=args.knn_enhance_its)
+        model=KNN(config={'patch_size':args.patch_size,'n':args.knn_n,'super_boundary_threshold':args.super_boundary_threshold,'match_method':args.knn_method,'weird_mean':args.knn_weird_mean,'similarity':args.knn_similarity,'normalize':args.knn_normalize,'bright_skip':args.knn_bright_skip,'enhance_its':args.knn_enhance_its})
     elif args.model in ('guess',):
         trainer=train_knn
         model=GUESS()
