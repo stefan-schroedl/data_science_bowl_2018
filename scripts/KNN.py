@@ -7,7 +7,7 @@ from sklearn.feature_extraction.image import reconstruct_from_patches_2d
 import imutils
 import cv2
 import faiss   
-from transform import random_rotate90_transform1
+from img_proc import random_rotate90_transform1
 from GUESS import *
 import cPickle as pickle
 
