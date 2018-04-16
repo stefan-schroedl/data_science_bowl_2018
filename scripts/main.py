@@ -35,7 +35,7 @@ import cv2
 
 from meter import Meter, NamedMeter
 
-from img_proc import numpy_img_to_torch, torch_img_to_numpy, postprocess_prediction
+from img_proc import numpy_img_to_torch, torch_img_to_numpy, postprocess_prediction, parametric_pipeline
 from utils import mkdir_p, csv_list, int_list, strip_end, init_logging, get_the_log, set_the_log, clear_log, list_log_keys, insert_log, get_latest_log, get_log, labels_to_rles, get_latest_checkpoint_file, get_checkpoint_file, checkpoint_file_from_dir, moving_average, as_py_scalar, stop_current_instance
 from adjust_learn_rate import get_learning_rate
 
@@ -253,7 +253,10 @@ def stack_images(imgs,w=5):
 
 valn=0
 iou_pipe=[]
+iou_e=[]
+iou_pipe_seg=[]
 iou_clusr4=[]
+iou_clusrr4=[]
 
 def validate_knn(model, loader, criterion):
     running_loss = 0.0
@@ -275,11 +278,9 @@ def validate_knn(model, loader, criterion):
         p=model.predict(img,gt=labels)
 
         torch_p_seg = torch.from_numpy(p['seg'][None,:,:].astype(np.float)/255).float()
-        print "SBT",args.super_boundary_threshold
+        print "SBT",args.super_boundary_threshold,"FOUND",p['clustered_r4_remove'].max(),"CONTOURS"
         _,p_super_boundary_thresh = cv2.threshold(p['super_boundary'],args.super_boundary_threshold,255,cv2.THRESH_BINARY)
-        print "WTF1"
         _,p_super_boundary_2_thresh = cv2.threshold(p['super_boundary_2'],20,255,cv2.THRESH_BINARY)
-        print "WTF2"
         super_boundary_combined = np.concatenate((0*p_super_boundary_thresh[:,:,None],p_super_boundary_thresh[:,:,None],p_super_boundary_2_thresh[:,:,None]),axis=2)
         up=hcat([torch_to_numpy(img),p['img'],p['boundary'],p['blend'],super_boundary_combined])
         down=hcat([torch_to_numpy(labels_seg),p['seg'],p_super_boundary_thresh,p['super_boundary'],4*p['super_boundary_2']])
@@ -295,12 +296,10 @@ def validate_knn(model, loader, criterion):
                 pass
         _,p_seg_thresh = cv2.threshold(p['seg'],20,255,cv2.THRESH_BINARY)
         p_seg_thresh/=255
-        try:
-            img_th = parametric_pipeline(p_seg_thresh.astype(np.uint8), circle_size=4)
-            iou_pipe.append(iou_metric(torch_to_numpy(labels,scale=1),img_th))
-        except:
-            print "Failed to run pipeline :("
-            iou_pipe.append(0)
+
+        img_th = parametric_pipeline(np.minimum(255-p['boundary'],p['seg']), circle_size=4)
+        img_th_seg = parametric_pipeline(p['seg'], circle_size=4)
+        
 
         print "TODO : IOU METRIC (GT, PRED)"
         #iou_l.append(iou_metric(torch_to_numpy(labels,scale=1),p['labeled']))
@@ -311,9 +310,21 @@ def validate_knn(model, loader, criterion):
         #iou_elr.append(iou_metric(torch_to_numpy(labels,scale=1),p['enhanced_label_remove']))
         #iou_clusr2.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r2']))
         #iou_clusr3.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r3']))
-        iou_clusr4.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r4']))
+        print "IOU METRIC",torch_to_numpy(labels,scale=1).max(),p['clustered_r4'][:,:,None].max()
+        iou_clusr4.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r4'][:,:,None]))
+        iou_clusrr4.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r4_remove'][:,:,None]))
+        iou_pipe.append(iou_metric(torch_to_numpy(labels,scale=1),img_th[:,:,None]))
+        iou_pipe_seg.append(iou_metric(torch_to_numpy(labels,scale=1),img_th_seg[:,:,None]))
+        iou_e.append(iou_metric(torch_to_numpy(labels,scale=1),p['enhanced_label'][:,:,None]))
+        #iou_clusr4.append(iou_metric(labels.numpy().squeeze(),p['clustered_r4']))
         #s="\t".join(map(lambda x : str(x) , ["IOU",iou_pipe[-1],iou_l[-1],iou_l2[-1],iou_el[-1],iou_clus[-1],iou_elr[-1],iou_clusr[-1],iou_clusr2[-1],iou_clusr3[-1],iou_clusr4[-1],"\nXXXXX\n",sum(iou_pipe)/len(iou_pipe),sum(iou_l)/len(iou_l),sum(iou_l2)/len(iou_l2),sum(iou_el)/len(iou_el),sum(iou_clus)/len(iou_clus),sum(iou_elr)/len(iou_elr),sum(iou_clusr)/len(iou_clusr),sum(iou_clusr2)/len(iou_clusr2),sum(iou_clusr3)/len(iou_clusr3),sum(iou_clusr4)/len(iou_clusr4)]))
-        s="\t".join(map(lambda x : str(x) , ["IOU",iou_clusr4[-1],"\nXXXXX\n",sum(iou_clusr4)/len(iou_clusr4)]))
+        xs=[iou_clusr4,iou_pipe,iou_pipe_seg,iou_clusrr4,iou_e]
+        s1=[]
+        s2=[]
+        for x in xs:
+            s1.append(x[-1])
+            s2.append(sum(x)/len(x))
+        s="\t".join(map(lambda x : str(x), s1)) + "XXX"+ "\t".join(map(lambda x : str(x), s2))
         print s
         f=open(args.prefix+'%d_%d.txt' % (valn,i),'w')
         f.write(s+'\n')
@@ -930,6 +941,8 @@ def main():
     parser.add('--super-boundary-threshold', type=int, default=20, help="threshold")
     parser.add('--prefix', type=str, default="", help="o")
     parser.add('--knn-method', type=str, default="hist", help="hist or patch")
+    parser.add('--knn-weird-mean', type=int, default=100, help="weird mean")
+    parser.add('--knn-similarity', type=int, default=0, help="similarity")
 
 
     print sys.argv
@@ -1002,7 +1015,7 @@ def main():
     print "HERE",args.model
     if args.model in ('knn',):
         trainer=train_knn
-        model=KNN(patch_size=args.patch_size,n=args.knn_n,super_boundary_threshold=args.super_boundary_threshold,match_method=args.knn_method)
+        model=KNN(patch_size=args.patch_size,n=args.knn_n,super_boundary_threshold=args.super_boundary_threshold,match_method=args.knn_method,weird_mean=args.knn_weird_mean,similarity=args.knn_similarity)
     elif args.model in ('guess',):
         trainer=train_knn
         model=GUESS()

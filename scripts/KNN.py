@@ -1,3 +1,5 @@
+from scipy.optimize import curve_fit
+
 from sklearn.neighbors import KNeighborsClassifier
 import numpy as np
 from sklearn.feature_extraction.image import extract_patches_2d
@@ -12,7 +14,7 @@ import cPickle as pickle
 class KNN():
     def eval():
         return 
-    def __init__(self,n=5,hist_n=10,patch_size=13,sample=400,gauss_blur=False,similarity=False,normalize=True,super_boundary_threshold=20,erode=False,match_method='hist'):
+    def __init__(self,n=5,hist_n=10,patch_size=13,sample=400,gauss_blur=False,similarity=False,normalize=True,super_boundary_threshold=20,erode=False,match_method='hist',weird_mean=100):
         print "SAMPLE IS ",sample, "SHOULD BE ~400?"
         print "TRY TO START WITH SUPER BOUNDARY INSTEAD OF JUST BOUNDARY>????"
         print "http://answers.opencv.org/question/60974/matching-shapes-with-hausdorff-and-shape-context-distance/"
@@ -30,6 +32,7 @@ class KNN():
         self.boundary_patch_size=13
         #self.model =  KNeighborsClassifier(n_neighbors=n,n_jobs=-1,algorithm='kd_tree') 
         self.sample = sample
+        self.weird_mean=weird_mean
         self.patches = [] #np.array([]) 
         self.patches_3d = [] #np.array([])
         self.histograms = []
@@ -41,7 +44,7 @@ class KNN():
 	gkernel=np.concatenate((gkernel,gkernel,gkernel,gkernel,gkernel,gkernel),axis=2)
 	gkernel=gkernel.reshape(-1)*self.patch_size*self.patch_size
         self.gkernel=gkernel
-        self.similarity=similarity
+        self.similarity=(similarity==1)
         self.gauss_blur=gauss_blur
         self.match_method=match_method
         self.img_sig=set([])
@@ -321,6 +324,42 @@ class KNN():
             r= reconstruct_from_patches_2d( knn_patches, (height, width)).astype(np.uint8)
             return r
 
+
+    def get_thresh(self,img):
+	mask=cv2.threshold(img,5,255,cv2.THRESH_BINARY)[1]
+	blur = img.copy()
+	#blur = cv2.GaussianBlur(img,(5,5),0)
+
+	# find normalized_histogram, and its cumulative distribution function
+	hist = cv2.calcHist([blur],[0],mask,[256],[0,256])
+	hist_norm = hist.ravel()/hist.max()
+	Q = hist_norm.cumsum()
+
+	bins = np.arange(256)
+
+	fn_min = np.inf
+	thresh = -1
+
+	for i in xrange(1,256):
+	    p1,p2 = np.hsplit(hist_norm,[i]) # probabilities
+	    q1,q2 = Q[i],Q[255]-Q[i] # cum sum of classes
+	    b1,b2 = np.hsplit(bins,[i]) # weights
+
+	    # finding means and variances
+	    m1,m2 = np.sum(p1*b1)/q1, np.sum(p2*b2)/q2
+	    v1,v2 = np.sum(((b1-m1)**2)*p1)/q1,np.sum(((b2-m2)**2)*p2)/q2
+
+	    # calculates the minimization function
+	    fn = v1*q1 + v2*q2
+	    if fn < fn_min:
+		fn_min = fn
+		thresh = i
+
+	# find otsu's threshold value with OpenCV function
+	#return cv2.threshold(blur,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+	return cv2.threshold(blur,thresh,255,cv2.THRESH_BINARY)
+
+
     def enhance(self,super_boundary_orig,super_boundary_2):
         super_boundary=np.maximum(super_boundary_orig,super_boundary_2)
         #super_boundary=((super_boundary.astype(np.float32)/super_boundary.max())*255).astype(np.uint8)
@@ -328,7 +367,7 @@ class KNN():
         reconstructed=super_boundary.copy()
 	gkernel=cv2.getGaussianKernel(ksize=self.boundary_patch_size,sigma=1)
 	gkernel=(gkernel*gkernel.T).reshape(-1)
-        for xx in range(5):
+        for xx in range(5): #DO 5!!!
             print "ENHANCE",xx
             r=self.reconstruct(reconstructed,self.patches_super_boundary_numpy,self.boundary_patch_size,self.super_boundary_model)
             #take out border artifacts
@@ -487,17 +526,54 @@ class KNN():
         height,width,_=img.shape
 	reconstructed_img = reconstructed[:,:,:3].astype(np.uint8)
 	reconstructed_mask = reconstructed[:,:,3].astype(np.uint8)
+	reconstructed_boundary = reconstructed[:,:,4].astype(np.uint8)
 	reconstructed_super_boundary = reconstructed[:,:,6].astype(np.uint8)
 	reconstructed_super_boundary_2 = reconstructed[:,:,7].astype(np.uint8)
 
         _,reconstructed_mask_thresh = cv2.threshold(reconstructed_mask,50,255,cv2.THRESH_BINARY)
+	cv2.imshow('reconstructed mask thresh',reconstructed_mask)
+
 
         _, contours, hierarchy = cv2.findContours(reconstructed_mask_thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+	print "CONTOURS",len(contours)
         marking_idx=2
         labels=np.ones_like(reconstructed_mask).astype(np.int32)
+
+        rbt = cv2.threshold(reconstructed_boundary, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
+        rsbt = cv2.threshold(reconstructed_super_boundary, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
+        rsb2t = cv2.threshold(reconstructed_super_boundary_2, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
+
+
+	rbtX = self.get_thresh(reconstructed_boundary)[1]
+	rsbtX = self.get_thresh(reconstructed_super_boundary)[1]
+	rsb2tX = self.get_thresh(reconstructed_super_boundary_2)[1]
+
+        #cv2.imshow('bound',reconstructed_boundary)
+        #cv2.imshow('bound otsu',rbt)
+        #cv2.imshow('bound otsu X',rbtX)
+        #cv2.imshow('bound s',reconstructed_super_boundary)
+        #cv2.imshow('bound s otsu',rsbtX)
+        #cv2.imshow('bound s2',reconstructed_super_boundary_2)
+        #cv2.imshow('bound s2 otsu', rsb2tX)
+        #cv2.waitKey(50000)
+
+	#orig
         enhanced=self.enhance(self.img_normalize(reconstructed_super_boundary),self.img_normalize(reconstructed_super_boundary_2))
+        #_,enhanced_thresh=cv2.threshold(enhanced,80,255,cv2.THRESH_BINARY)
+
+        #enhanced=self.enhance(self.img_normalize(reconstructed_boundary),self.img_normalize(reconstructed_super_boundary_2))
         _,enhanced_thresh=cv2.threshold(enhanced,80,255,cv2.THRESH_BINARY)
+	
+        #_,enhanced_thresh=self.get_thresh(enhanced)
         enhanced_thresh=-enhanced_thresh+255
+
+        enot = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
+        #cv2.imshow('enhanced',enhanced)
+        #cv2.imshow('enhanced ot',enot)
+        #cv2.imshow('enhanced_thresh',enhanced_thresh)
+        #cv2.imshow('rec mask',reconstructed_mask)
+        #cv2.waitKey(500000)
+
         for x in xrange(len(contours)):
             ix,iy,iw,ih = cv2.boundingRect(contours[x])
             min_dist=None
@@ -508,18 +584,29 @@ class KNN():
             roi_img = roi[:,:,:3].astype(np.uint8)
 	    rect = cv2.minAreaRect(contours[x])
             roi_mask = roi[:,:,3].astype(np.uint8)
+            roi_boundary = roi[:,:,4].astype(np.uint8)
+            roi_boundary_otsu = self.get_thresh(roi_boundary)[1]
+
             roi_enhanced_thresh=np.multiply(roi_mask,enhanced_thresh)
+            #cv2.imshow('roi mask',roi_mask)
+	    #cv2.imshow('roi',roi_enhanced_thresh)
+	    #cv2.imshow('roi_boundaruy',roi_boundary)
+	    #cv2.imshow('roi_boundaruy o',roi_boundary_otsu)
             _, roi_contours, roi_hierarchy = cv2.findContours(roi_enhanced_thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+	    #print "FOUND",len(roi_contours),"CONTOURS"
             if len(roi_contours)>0:
                 cv2.fillPoly(labels, [contours[x]], 0)
                 for roi_x in xrange(len(roi_contours)):
                     color = np.random.randint(0,255,(3)).tolist() 
-                    cv2.drawContours(roi_img,[roi_contours[roi_x]],0,color,2)
                     cv2.fillPoly(labels, [roi_contours[roi_x]], int(marking_idx))
                     marking_idx+=1
+		    #if len(roi_contours)>1:
+                    #	r=cv2.drawContours(roi_img,[roi_contours[roi_x]],0,color,2)
+		    #    cv2.imshow('r',r)
+            	    #    cv2.waitKey(500000)
             else:
                 color = np.random.randint(0,255,(3)).tolist() 
-                cv2.drawContours(roi_img,[contours[x]],0,color,2)
+                #cv2.drawContours(roi_img,[contours[x]],0,color,2)
                 cv2.fillPoly(labels, [contours[x]], int(marking_idx))
                 marking_idx+=1
         water=cv2.watershed(cv2.cvtColor(reconstructed_mask, cv2.COLOR_GRAY2BGR),labels)-1
@@ -586,7 +673,7 @@ class KNN():
         for x in xrange(l.max()):
             if x<=0:
                 continue
-            if mask[l==x].mean()<60:
+            if mask[l==x].mean()<self.weird_mean:
                 l[l==x]=0
                 offset+=1
             else:
@@ -662,9 +749,16 @@ class KNN():
 	reconstructed_super_boundary_2 = reconstructed[:,:,7].astype(np.uint8)
 	#reconstructed_mask_eroded = reconstructed[:,:,7].astype(np.uint8)
 
-        _,clustered=self.by_cluster(img,reconstructed)
+        enhanced,clustered=self.by_cluster(img,reconstructed)
+        _,enhanced_thresh = cv2.threshold(enhanced,self.super_boundary_threshold*4,255,cv2.THRESH_BINARY)
+        enhanced_label = self.label(enhanced_thresh,reconstructed_mask).astype(np.int32)
+        enhanced_label[enhanced_label<0]=0
+        enhanced_label=enhanced_label.astype(np.uint8)
 
         d={}
+        d['enhanced']=enhanced
+        enhanced_label=self.remove_weird_labels(enhanced_label,reconstructed_mask)
+        d['enhanced_label']=enhanced_label
         d['img']=reconstructed_img
         d['seg']=reconstructed_mask
         d['boundary']=reconstructed_boundary
@@ -672,9 +766,11 @@ class KNN():
         d['super_boundary']=reconstructed_super_boundary
         d['super_boundary_2']=reconstructed_super_boundary_2
         d['similar_hist_images']=similar_hist_images
+	d['clustered']=clustered
         d['clustered_r4']=self.shrink_nuclei(clustered)
+        d['clustered_r4_remove']=self.shrink_nuclei(self.remove_weird_labels(clustered,reconstructed_mask))
 	d['gt']=gt
-	for x in ['clustered_r4']:
+	for x in ['clustered','clustered_r4','clustered_r4_remove']:
 		d["color_"+x]=self.color_label(d[x])
         return d 
     
