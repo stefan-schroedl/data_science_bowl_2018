@@ -252,11 +252,7 @@ def stack_images(imgs,w=5):
 
 
 valn=0
-iou_pipe=[]
-iou_e=[]
-iou_pipe_seg=[]
-iou_clusr4=[]
-iou_clusrr4=[]
+ious={'pipe':[],'e':[],'pipe_seg':[],'clusr4':[],'clusrr4':[],'clusr_ro':[],'e_ro':[],'clusr_d':[],'clusr_d_ro':[]}
 
 def validate_knn(model, loader, criterion):
     running_loss = 0.0
@@ -278,7 +274,7 @@ def validate_knn(model, loader, criterion):
         p=model.predict(img,gt=labels)
 
         torch_p_seg = torch.from_numpy(p['seg'][None,:,:].astype(np.float)/255).float()
-        print "SBT",args.super_boundary_threshold,"FOUND",p['clustered_r4_remove'].max(),"CONTOURS"
+        print "SBT",args.super_boundary_threshold,"FOUND R4_REMOVE",p['clustered_r4_remove'].max(),"CONTOURS","E",p['enhanced_label'].max()
         _,p_super_boundary_thresh = cv2.threshold(p['super_boundary'],args.super_boundary_threshold,255,cv2.THRESH_BINARY)
         _,p_super_boundary_2_thresh = cv2.threshold(p['super_boundary_2'],20,255,cv2.THRESH_BINARY)
         super_boundary_combined = np.concatenate((0*p_super_boundary_thresh[:,:,None],p_super_boundary_thresh[:,:,None],p_super_boundary_2_thresh[:,:,None]),axis=2)
@@ -311,20 +307,23 @@ def validate_knn(model, loader, criterion):
         #iou_clusr2.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r2']))
         #iou_clusr3.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r3']))
         print "IOU METRIC",torch_to_numpy(labels,scale=1).max(),p['clustered_r4'][:,:,None].max()
-        iou_clusr4.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r4'][:,:,None]))
-        iou_clusrr4.append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r4_remove'][:,:,None]))
-        iou_pipe.append(iou_metric(torch_to_numpy(labels,scale=1),img_th[:,:,None]))
-        iou_pipe_seg.append(iou_metric(torch_to_numpy(labels,scale=1),img_th_seg[:,:,None]))
-        iou_e.append(iou_metric(torch_to_numpy(labels,scale=1),p['enhanced_label'][:,:,None]))
+        ious['clusr4'].append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r4'][:,:,None]))
+        ious['clusrr4'].append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_r4_remove'][:,:,None]))
+        ious['pipe'].append(iou_metric(torch_to_numpy(labels,scale=1),img_th[:,:,None]))
+        ious['pipe_seg'].append(iou_metric(torch_to_numpy(labels,scale=1),img_th_seg[:,:,None]))
+        ious['e'].append(iou_metric(torch_to_numpy(labels,scale=1),p['enhanced_label'][:,:,None]))
+        ious['clusr_ro'].append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_ro'][:,:,None]))
+        ious['clusr_d'].append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_d'][:,:,None]))
+        ious['clusr_d_ro'].append(iou_metric(torch_to_numpy(labels,scale=1),p['clustered_d_ro'][:,:,None]))
+        ious['e_ro'].append(iou_metric(torch_to_numpy(labels,scale=1),p['enhanced_label_ro'][:,:,None]))
         #iou_clusr4.append(iou_metric(labels.numpy().squeeze(),p['clustered_r4']))
         #s="\t".join(map(lambda x : str(x) , ["IOU",iou_pipe[-1],iou_l[-1],iou_l2[-1],iou_el[-1],iou_clus[-1],iou_elr[-1],iou_clusr[-1],iou_clusr2[-1],iou_clusr3[-1],iou_clusr4[-1],"\nXXXXX\n",sum(iou_pipe)/len(iou_pipe),sum(iou_l)/len(iou_l),sum(iou_l2)/len(iou_l2),sum(iou_el)/len(iou_el),sum(iou_clus)/len(iou_clus),sum(iou_elr)/len(iou_elr),sum(iou_clusr)/len(iou_clusr),sum(iou_clusr2)/len(iou_clusr2),sum(iou_clusr3)/len(iou_clusr3),sum(iou_clusr4)/len(iou_clusr4)]))
-        xs=[iou_clusr4,iou_pipe,iou_pipe_seg,iou_clusrr4,iou_e]
         s1=[]
         s2=[]
-        for x in xs:
-            s1.append(x[-1])
-            s2.append(sum(x)/len(x))
-        s="\t".join(map(lambda x : str(x), s1)) + "XXX"+ "\t".join(map(lambda x : str(x), s2))
+        for k in ious.keys():
+            s1.append("%s:%0.5f" % (k,ious[k][-1]))
+            s2.append("%s:%0.5f" % (k,sum(ious[k])/len(ious[k])))
+        s="\t".join(map(lambda x : str(x), s1)) + " XXX "+ "\t".join(map(lambda x : str(x), s2))
         print s
         f=open(args.prefix+'%d_%d.txt' % (valn,i),'w')
         f.write(s+'\n')
@@ -947,6 +946,8 @@ def main():
     parser.add('--knn-method', type=str, default="hist", help="hist or patch")
     parser.add('--knn-weird-mean', type=int, default=100, help="weird mean")
     parser.add('--knn-similarity', type=int, default=0, help="similarity")
+    parser.add('--knn-normalize', type=int, default=1, help="normalize")
+    parser.add('--knn-bright-skip', type=int, default=253, help="bright skip")
 
 
     print sys.argv
@@ -1019,7 +1020,7 @@ def main():
     print "HERE",args.model
     if args.model in ('knn',):
         trainer=train_knn
-        model=KNN(patch_size=args.patch_size,n=args.knn_n,super_boundary_threshold=args.super_boundary_threshold,match_method=args.knn_method,weird_mean=args.knn_weird_mean,similarity=args.knn_similarity)
+        model=KNN(patch_size=args.patch_size,n=args.knn_n,super_boundary_threshold=args.super_boundary_threshold,match_method=args.knn_method,weird_mean=args.knn_weird_mean,similarity=args.knn_similarity,normalize=args.knn_normalize,bright_skip=args.knn_bright_skip)
     elif args.model in ('guess',):
         trainer=train_knn
         model=GUESS()

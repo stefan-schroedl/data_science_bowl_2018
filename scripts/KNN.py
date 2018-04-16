@@ -14,7 +14,7 @@ import cPickle as pickle
 class KNN():
     def eval():
         return 
-    def __init__(self,n=5,hist_n=10,patch_size=13,sample=400,gauss_blur=False,similarity=False,normalize=True,super_boundary_threshold=20,erode=False,match_method='hist',weird_mean=100):
+    def __init__(self,n=5,hist_n=10,patch_size=13,sample=400,gauss_blur=False,similarity=0,normalize=1,super_boundary_threshold=20,erode=False,match_method='hist',weird_mean=100,bright_skip=253):
         print "SAMPLE IS ",sample, "SHOULD BE ~400?"
         print "TRY TO START WITH SUPER BOUNDARY INSTEAD OF JUST BOUNDARY>????"
         print "http://answers.opencv.org/question/60974/matching-shapes-with-hausdorff-and-shape-context-distance/"
@@ -30,6 +30,7 @@ class KNN():
         self.boundary_blur=9 #9
         self.patch_size=patch_size
         self.boundary_patch_size=13
+        self.bright_skip=bright_skip
         #self.model =  KNeighborsClassifier(n_neighbors=n,n_jobs=-1,algorithm='kd_tree') 
         self.sample = sample
         self.weird_mean=weird_mean
@@ -37,7 +38,7 @@ class KNN():
         self.patches_3d = [] #np.array([])
         self.histograms = []
         self.images = []
-	self.normalize = normalize
+	self.normalize = normalize==1
 	gkernel=cv2.getGaussianKernel(ksize=patch_size,sigma=1)
 	gkernel=gkernel*gkernel.T
 	gkernel=gkernel.reshape(patch_size,patch_size,1)
@@ -393,13 +394,12 @@ class KNN():
         #img[-1,:]=255
         #img[:,0]=255
         #img[:,-1]=255
-        cv2.imshow("WTF WTF",img)
-        cv2.waitKey(100)
+        #cv2.imshow("WTF WTF",img)
+        #cv2.waitKey(100)
         img[0,:]=seg[0,:]
         img[-1,:]=seg[-1,:]
         img[:,0]=seg[:,0]
         img[:,-1]=seg[:,-1]
-        img3=np.zeros((img.shape[0],img.shape[1],3))
         im2, contours, hierarchy = cv2.findContours(img, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         l = img[:,:]*0
         roots=set([])
@@ -407,7 +407,9 @@ class KNN():
         for x in xrange(len(contours)):
 	    #rect = cv2.minAreaRect(contours[x])
             area = cv2.contourArea(contours[x])
-            print "AREA",area
+            #print "AREA",area
+            if area<1:
+                continue
             nxt,prv,child,parent = hierarchy[0][x]
             if parent>=0:
                 if parent not in tree:
@@ -424,16 +426,20 @@ class KNN():
                 tree[cur]=set([])
             a=float(cv2.contourArea(contours[cur]))/(img.shape[0]*img.shape[1])
             color = np.random.randint(0,255,(3)).tolist() 
-            cv2.drawContours(img3,[contours[cur]],0,color,2)
+            img3=np.zeros((img.shape[0],img.shape[1],3))
             nxt,prv,child,parent = hierarchy[0][cur]
-            if True:# child==-1 and a<0.3: #True: # and len(children[cur])<=2:
+            if child==-1 and a<0.3: #True: # and len(children[cur])<=2:
                 cv2.fillPoly(l, [contours[cur]], int(idx))
-                #if img[l==idx].mean()>253:
-                #    l[l==idx]=0
-                #elif seg[l==x].mean()<100:
-                #    l[l==idx]=1
-                #else:
-                if l[l==idx].sum()>0:
+                if img.ndim==3 and img[l==idx].mean()>self.bright_skip:
+                    l[l==idx]=0
+                    #cv2.drawContours(img3,[contours[cur]],0,color,2)
+                    #cv2.imshow('wtf',img3)
+                    #print "SKIP BRIGHT"
+                    #cv2.waitKey(500000)
+                elif seg[l==x].mean()<100:
+                    l[l==idx]=1
+                else:
+                    #if l[l==idx].sum()>0:
                     idx+=1
             #add all the kids to the stack
             if cur in tree:
@@ -451,13 +457,28 @@ class KNN():
         #cv2.imshow('img/l/l*255/contours',np.concatenate((img,l,l*255,cv2.drawContours(img*0, contours, -1, 255, 3)),axis=1))
         #cv2.imshow('img3',img3.astype(np.uint8))
         #cv2.waitKey(3)
+        water=True
+        seg_mask = cv2.threshold(seg, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
+        cv2.imshow('seg_mask',seg_mask)
+        cv2.imshow('l',self.color_label(l))
+        if water:
+            l=l.astype(np.int32)
+            #l[l==0]=1
+            l[seg<10]=1
+            l=cv2.watershed(cv2.cvtColor(seg, cv2.COLOR_GRAY2BGR),l)-1
+            l[l<0]=0 # set bg and unknown to 0
+        cv2.imshow('lwater',self.color_label(l))
+        cv2.waitKey(500000)
+        #for x in xrange(l.max()+1):
+        #    print "LABEL",x,(l==x).sum()
+        #sys.exit(1)
         return l
 
 
     def color_label(self,labels,colors=None):
         out=np.zeros((labels.shape[0],labels.shape[1],3)).astype(np.uint8)
         labels=np.squeeze(labels)
-        for x in xrange(labels.max()):
+        for x in xrange(labels.max()+1):
             color = np.random.randint(0,255,(3)).tolist() 
 	    if labels[labels==(x+1)].sum()>0:
             	out[labels==(x+1)]=color
@@ -539,14 +560,14 @@ class KNN():
         marking_idx=2
         labels=np.ones_like(reconstructed_mask).astype(np.int32)
 
-        rbt = cv2.threshold(reconstructed_boundary, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
-        rsbt = cv2.threshold(reconstructed_super_boundary, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
-        rsb2t = cv2.threshold(reconstructed_super_boundary_2, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
+        #rbt = cv2.threshold(reconstructed_boundary, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
+        #rsbt = cv2.threshold(reconstructed_super_boundary, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
+        #rsb2t = cv2.threshold(reconstructed_super_boundary_2, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
 
 
-	rbtX = self.get_thresh(reconstructed_boundary)[1]
-	rsbtX = self.get_thresh(reconstructed_super_boundary)[1]
-	rsb2tX = self.get_thresh(reconstructed_super_boundary_2)[1]
+	#rbtX = self.get_thresh(reconstructed_boundary)[1]
+	#rsbtX = self.get_thresh(reconstructed_super_boundary)[1]
+	#rsb2tX = self.get_thresh(reconstructed_super_boundary_2)[1]
 
         #cv2.imshow('bound',reconstructed_boundary)
         #cv2.imshow('bound otsu',rbt)
@@ -567,7 +588,7 @@ class KNN():
         #_,enhanced_thresh=self.get_thresh(enhanced)
         enhanced_thresh=-enhanced_thresh+255
 
-        enot = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
+        #enot = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
         #cv2.imshow('enhanced',enhanced)
         #cv2.imshow('enhanced ot',enot)
         #cv2.imshow('enhanced_thresh',enhanced_thresh)
@@ -653,7 +674,25 @@ class KNN():
                 labels_new[cur_mask>100]=idx-offset
         return labels_new
 
+
+
+    def dilate_masks(self,labels_orig):
+        labels=labels_orig.copy()
+        overlaps= np.zeros_like(labels).astype(np.uint8)
+        kernel = np.ones((3,3), np.uint8)
+        for x in xrange(labels.max()):
+            idx=x+1
+            cur_mask = np.zeros_like(labels).astype(np.uint8)
+            cur_mask[labels_orig==idx]=255
+            cur_mask = cv2.dilate(cur_mask, kernel, iterations=1)
+            labels[cur_mask>0]=idx # assign in new mask the updates
+            cur_mask[cur_mask>100]=1
+            overlaps+=cur_mask
+        labels[overlaps>1]=labels_orig[overlaps>1]
+        return labels
+
     def remove_overlap(self,labels):
+        labels=labels.copy()
         overlaps= np.zeros_like(labels).astype(np.uint8)
         kernel = np.ones((5,5), np.uint8)
         for x in xrange(labels.max()):
@@ -665,19 +704,25 @@ class KNN():
             overlaps+=cur_mask
         labels=labels.copy()
         labels[overlaps>1]=0
+        offset=0
+        for x in xrange(labels.max()):
+            idx=x+1
+            if labels[labels==idx].sum()<1:
+                offset+=1
+            else:
+                labels[labels==idx]=idx-offset
         return labels
 
     def remove_weird_labels(self,l,mask):
         l=l.copy()
         offset=0
         for x in xrange(l.max()):
-            if x<=0:
-                continue
-            if mask[l==x].mean()<self.weird_mean:
-                l[l==x]=0
+            idx=x+1
+            if l[l==idx].sum()<1 or mask[l==idx].mean()<self.weird_mean:
+                l[l==idx]=0
                 offset+=1
             else:
-                l[l==x]=x-offset
+                l[l==idx]=idx-offset
         return l
 
     def predict(self,img,gt=None):
@@ -758,7 +803,10 @@ class KNN():
         d={}
         d['enhanced']=enhanced
         enhanced_label=self.remove_weird_labels(enhanced_label,reconstructed_mask)
-        d['enhanced_label']=enhanced_label
+        for x in xrange(enhanced_label.max()+1):
+            print x,(enhanced_label==x).sum()
+        d['enhanced_label']=self.remove_weird_labels(enhanced_label,reconstructed_mask)
+        d['enhanced_label_ro']=self.remove_overlap(enhanced_label)
         d['img']=reconstructed_img
         d['seg']=reconstructed_mask
         d['boundary']=reconstructed_boundary
@@ -766,12 +814,16 @@ class KNN():
         d['super_boundary']=reconstructed_super_boundary
         d['super_boundary_2']=reconstructed_super_boundary_2
         d['similar_hist_images']=similar_hist_images
-	d['clustered']=clustered
-        d['clustered_r4']=self.shrink_nuclei(clustered)
-        d['clustered_r4_remove']=self.shrink_nuclei(self.remove_weird_labels(clustered,reconstructed_mask))
+	d['clustered']=self.remove_weird_labels(clustered,reconstructed_mask)
+	d['clustered_d']=self.dilate_masks(d['clustered'])
+	d['clustered_d_ro']=self.remove_overlap(self.dilate_masks(d['clustered']))
+        d['clustered_ro']=self.remove_overlap(d['clustered'])
+        d['clustered_r4']=self.shrink_nuclei(d['clustered'])
+        d['clustered_r4_remove']=self.shrink_nuclei(d['clustered'])
 	d['gt']=gt
-	for x in ['clustered','clustered_r4','clustered_r4_remove']:
+	for x in ['clustered','clustered_r4','clustered_r4_remove','enhanced_label','clustered_ro','enhanced_label_ro','clustered_d','clustered_d_ro']:
 		d["color_"+x]=self.color_label(d[x])
+                print "FOUND NUCLEI",x,d[x].max()
         return d 
     
     
