@@ -37,7 +37,7 @@ from meter import Meter, NamedMeter
 
 from img_proc import numpy_img_to_torch, torch_img_to_numpy, postprocess_prediction, parametric_pipeline
 from utils import mkdir_p, csv_list, int_list, strip_end, init_logging, get_the_log, set_the_log, clear_log, list_log_keys, insert_log, get_latest_log, get_log, labels_to_rles, get_latest_checkpoint_file, get_checkpoint_file, checkpoint_file_from_dir, moving_average, as_py_scalar, stop_current_instance
-from adjust_learn_rate import get_learning_rate
+#from adjust_learn_rate import get_learning_rate
 
 from KNN import *
 
