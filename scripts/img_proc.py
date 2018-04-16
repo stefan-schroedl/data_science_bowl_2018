@@ -49,7 +49,13 @@ def torch_img_to_numpy(t):
     t = t.cpu().numpy().squeeze()
     if t.ndim > 2:
         t = t.transpose(1, 2, 0)
-    t = (t / t.max() * 255).astype(np.uint8)
+    if t.ndim == 3:
+        ax = (0,1)
+    else:
+        ax = None
+    mi = t.min(axis=ax)
+    ma = t.max(axis=ax)
+    t = (t * (ma- mi) + mi)*255
     return t
 
 
