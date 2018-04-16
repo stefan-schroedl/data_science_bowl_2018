@@ -49,9 +49,15 @@ def torch_img_to_numpy(t):
     t = t.cpu().numpy().squeeze()
     if t.ndim > 2:
         t = t.transpose(1, 2, 0)
-    t = (t / t.max() * 255).astype(np.uint8)
+    if t.ndim == 3:
+        ax = (0,1)
+    else:
+        ax = None
+    mi = t.min(axis=ax)
+    ma = t.max(axis=ax)
+    eps = 1e-16
+    t = ((t - mi) / (ma - mi + eps) * 255).astype(np.uint8)
     return t
-
 
 def numpy_img_to_torch(n, unsqueeze=False):
     n = np.ascontiguousarray(n)
