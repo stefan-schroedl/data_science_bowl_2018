@@ -54,7 +54,7 @@ def union_intersection(labels, y_pred, exclude_bg=True):
 
 
 def iou_metric(labels, y_pred, print_table=False):
-
+    print "IOU WTF",labels.shape,y_pred.shape
     if labels.max() == 0 or y_pred.min() == y_pred.max():
         return 0.0
 

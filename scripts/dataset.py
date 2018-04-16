@@ -214,6 +214,7 @@ class NucleusDataset(Dataset):
         trans_det_color = self.augment_color.to_deterministic()
 
         def trans_if_img(img):
+            return numpy_img_to_torch(img)
             if isinstance(img, np.ndarray):
                 img = trans_det.augment_image(img)
                 if len(
