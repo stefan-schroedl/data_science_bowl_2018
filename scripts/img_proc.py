@@ -399,12 +399,12 @@ def random_rotate90_transform1(image, k):
     elif k == 1:
         image = image.transpose(1, 0, 2)
         image = np.flip(image, 0).copy()
-        if k == 2:
-            image = np.flip(np.flip(image, 0), 1).copy()
-        elif k == 3:
-            image = image.transpose(1, 0, 2)
-            image = np.flip(image, 1).copy()
-        return image
+    elif k == 2:
+        image = np.flip(np.flip(image, 0), 1).copy()
+    elif k == 3:
+        image = image.transpose(1, 0, 2)
+        image = np.flip(image, 1).copy()
+    return image
 
 ####
 
