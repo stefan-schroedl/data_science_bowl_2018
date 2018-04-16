@@ -531,6 +531,10 @@ def make_submission(dset, model, args, pred_field_iou='seg'):
             ax[0].title.set_text('img')
             ax[0].title.set_fontsize(100)
             ax[0].imshow(img)
+            #pred_l, _ = postprocess_prediction(pred['seg'], max_clusters_for_dilation=50)
+            #ax[1].title.set_text('postproc')
+            #ax[1].title.set_fontsize(100)
+            #ax[1].imshow(pred_l)
             for j,(name,pred_part) in enumerate(pred.items()):
                 mi = pred_part.data.min()
                 ma = pred_part.data.max()
