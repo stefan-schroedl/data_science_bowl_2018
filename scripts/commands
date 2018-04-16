@@ -1,0 +1,4 @@
+export OMP_WAIT_POLICY=PASSIVE; OMP_NUM_THREADS=8 python main.py --model knn --data ../explore/ --stage stagesmall --eval-every 10
+export PYTHONPATH=:/Users/miskodzamba/research/data_science_bowl_2018/scripts/:/Users/miskodzamba/research/faiss/
+OMP_NUM_THREADS=8 python main.py --model knn --data ../explore/ --stage stagesmall --eval-every 10 --knn-normalize 0 --knn-weird-mean 80
+export OMP_WAIT_POLICY=PASSIVE; OMP_NUM_THREADS=8 python main.py --model knn --data ../explore/ --stage stagesmall --eval-every 10 --knn-normalize 0 --knn-weird-mean 40  --knn-enhance-its 5
