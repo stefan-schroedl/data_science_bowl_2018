@@ -59,6 +59,7 @@ def torch_img_to_numpy(t):
     t = ((t - mi) / (ma - mi + eps) * 255).astype(np.uint8)
     return t
 
+
 def numpy_img_to_torch(n, unsqueeze=False):
     n = np.ascontiguousarray(n)
     # to avoid 'negative stride' error -
@@ -356,7 +357,9 @@ def affine_augmentation():
                     iaa.CropAndPad(percent=(-0.25, 0.25), pad_cval=0)
                     ]),
         # Deformations
-        iaa.PiecewiseAffine(scale=(0.00, 0.06))
+        # WARNING: PiecewiseAffine basically erases contour lines!!!
+        # iaa.PiecewiseAffine(scale=(0.00, 0.06))
+        iaa.Affine(shear=(-15, 15), mode=ia.ALL, order=[0, 1])
     ], random_order=True)
 
 
