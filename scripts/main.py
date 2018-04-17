@@ -33,8 +33,7 @@ import cv2
 from meter import Meter, NamedMeter
 
 from img_proc import numpy_img_to_torch, torch_img_to_numpy, postprocess_prediction
-from utils import mkdir_p, csv_list, int_list, strip_end, init_logging, get_the_log, set_the_log, clear_log, list_log_keys, insert_log, get_latest_log, get_log, labels_to_rles, get_latest_checkpoint_file, get_checkpoint_file, checkpoint_file_from_dir, moving_average, as_py_scalar, stop_current_instance
-from adjust_learn_rate import get_learning_rate
+from utils import mkdir_p, csv_list, int_list, strip_end, init_logging, get_the_log, set_the_log, clear_log, list_log_keys, insert_log, get_latest_log, get_log, labels_to_rles, get_latest_checkpoint_file, get_checkpoint_file, checkpoint_file_from_dir, moving_average, as_py_scalar, stop_current_instance, get_learning_rate
 
 from KNN import *
 
@@ -349,7 +348,8 @@ def validate(
         instance_weight_field=None,
         calc_iou=False,
         max_clusters_for_dilation=100,
-        calc_baseline=False):
+        calc_baseline=False,
+        desc='valid'):
     # calc_baseline=True -> calculate loss when predicting constant global
     # average
 
@@ -369,7 +369,7 @@ def validate(
             logging.info(msg)
 
 
-    for i, row in tqdm(enumerate(loader), desc='valid', total=loader.__len__()):
+    for i, row in tqdm(enumerate(loader), desc=desc, total=loader.__len__()):
 
         transfer_data(row, targets, input_field, instance_weight_field)
 
@@ -678,21 +678,22 @@ def make_criterion(args):
 def epoch_logging_message(global_state, targets, stats_train, stats_valid, len_train=None, len_valid=None):
 
     msg = '[%d, %d]' % (global_state['epoch'], global_state['it'])
-    msg += 'TRAIN loss = %.3g +- %.3g\tiou = %.3g += %.3g' % (stats_train['loss'].avg, stats_train['loss'].std, stats_train['iou'].avg, stats_train['iou'].std)
+    msg += '\tTRAIN loss = %.3g +- %.3g\tiou = %.3g += %.3g' % (stats_train['loss'].avg, stats_train['loss'].std, stats_train['iou'].avg, stats_train['iou'].std)
 
     for k in [target['name'] for target in targets]:
         msg += '\t%s = %.3g +- %.3g' % (k, stats_train[k].avg, stats_train[k].std)
 
     msg += '\tVAL loss = %.3g +- %.3g\tiou = %.3g +- %.3g' % (stats_valid['loss'].avg, stats_valid['loss'].std, stats_valid['iou'].avg, stats_valid['iou'].std)
 
-    for k in [target['name'] for target in targets]:
-        msg += '\t%s = %.3g +- %.3g' % (k, stats_valid[k].avg, stats_valid[k].std)
+    for target in targets:
+        name = target['name']
+        msg += '\t%s = %.3g +- %.3g' % (name, stats_valid[name].avg, stats_valid[name].std)
 
     msg += '\twt = %.3g +- %.3g' % (stats_train['inst_wt'].avg, stats_train['inst_wt'].std)
 
     msg += '\tlr = %.3g' % (global_state['lr'])
 
-    if len_train is not None:
+    if len_train is not None and len_valid is not None:
         time_total = stats_train['time'].sum
         time_val = stats_valid['time'].avg
         n_val = stats_valid['time'].count
@@ -761,10 +762,10 @@ def parse_targets(args):
              'w_crit' : w_crit,
              'w_class': w_class})
 
-        # normalize weights
-        s = float(sum([target['w_crit'] for target in targets]))
-        for target in targets:
-            target['w_crit'] /= s
+    # normalize weights
+    s = float(sum([target['w_crit'] for target in targets]))
+    for target in targets:
+        target['w_crit'] /= s
 
     return targets
 
@@ -1033,8 +1034,10 @@ def main():
 
     train_loader = DataLoader(train_dset, batch_size=batch_size_train, shuffle=True,
                               pin_memory=(args.cuda > 0), num_workers=args.workers)
-    valid_loader = DataLoader( valid_dset, batch_size=batch_size_valid, shuffle=True,
+    valid_loader = DataLoader(valid_dset, batch_size=batch_size_valid, shuffle=True,
                                pin_memory=(args.cuda > 0), num_workers=args.workers)
+
+    logging.info('train set size: %d; test set size: %d' % (len(train_dset), len(valid_dset)))
 
 
     # score data
@@ -1048,11 +1051,11 @@ def main():
 
         stats_train = NamedMeter()
         validate(stats_train, train_loader, targets, model, global_state['args'].input_field, instance_weight_field=None,
-                 calc_iou = (args.do == 'score'), max_clusters_for_dilation=max_clusters, calc_baseline = (args.do == 'baseline'))
+                 calc_iou = (args.do == 'score'), max_clusters_for_dilation=max_clusters, calc_baseline = (args.do == 'baseline'), desc='train')
 
         stats_valid = NamedMeter()
-        validate(stats_valid, train_loader, targets, model, global_state['args'].input_field, instance_weight_field=None,
-                 calc_iou = (args.do == 'score'), max_clusters_for_dilation=max_clusters)
+        validate(stats_valid, valid_loader, targets, model, global_state['args'].input_field, instance_weight_field=None,
+                 calc_iou = (args.do == 'score'), max_clusters_for_dilation=max_clusters, desc='valid')
         msg = epoch_logging_message(global_state, targets, stats_train, stats_valid)
         logging.info(msg)
         print msg
@@ -1068,9 +1071,6 @@ def main():
     for k in global_state['args'].__dict__:
         logging.info('> %s = %s' % (k, str(global_state['args'].__dict__[k])))
     logging.info('')
-    logging.info(
-        'train set: %d; test set: %d' %
-        (len(train_dset), len(valid_dset)))
 
     recovered_ckpt = None
     recovery_attempts = 0
