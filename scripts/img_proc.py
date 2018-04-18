@@ -353,13 +353,14 @@ def affine_augmentation():
                    [iaa.Fliplr(0.5),
                     iaa.Flipud(0.5),
                     iaa.Affine(rotate=(0, 360),
-                               translate_percent=(-0.1, 0.1)),
+                               translate_percent=(-0.1, 0.1),
+                               mode='symmetric'),
                     iaa.CropAndPad(percent=(-0.25, 0.25), pad_cval=0)
                     ]),
         # Deformations
         # WARNING: PiecewiseAffine basically erases contour lines!!!
         # iaa.PiecewiseAffine(scale=(0.00, 0.06))
-        iaa.Affine(shear=(-15, 15), mode=ia.ALL, order=[0, 1])
+        iaa.Affine(scale=(.8, 1.2), mode='symmetric', order=[0, 1])
     ], random_order=True)
 
 

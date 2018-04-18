@@ -14,8 +14,8 @@ from torch.nn.utils import weight_norm
 from groupnorm import GroupNorm
 
 INPLACE = True
-
 USE_GROUPNORM = True
+
 
 def norm_layer(num_filters, dummy=None):
     if USE_GROUPNORM:
@@ -27,10 +27,10 @@ def norm_layer(num_filters, dummy=None):
         return nn.BatchNorm2d(num_filters)
 
 
-def init_weights(net, method='kaiming'):
+def init_weights(net, method='kaiming', output_layer_averages={}):
     if method not in ['kaiming', 'xavier']:
         raise ValueError('no such init method: %s' % method)
-    for m in net.modules():
+    for name, m in net.named_modules():
         classname = m.__class__.__name__
         if classname.find('Conv') != -1:
             if method == 'kaiming':
@@ -38,7 +38,13 @@ def init_weights(net, method='kaiming'):
             else:
                 init.xavier_uniform(m.weight)
             if m.bias is not None:
-                init.constant(m.bias, 0)
+                init_val = 0.0
+                if name in output_layer_averages:
+                    #  Init so that the average after sigmoid will end up being init_val
+                    init_val = output_layer_averages[name]
+                    init_val = -math.log((1-init_val)/init_val)
+
+                init.constant(m.bias, init_val)
             elif classname.find('BatchNorm') != -1 and m.weight and m.weight.data:
                 m.weight.data.normal_(1.0, 0.02)
                 m.bias.data.fill_(0)
@@ -49,6 +55,7 @@ def init_weights(net, method='kaiming'):
         else:
             if m != net:
                 init_weights(m, method=method)
+
 
 def fwd_hook(self, input, output):
     # input is a tuple of packed inputs
@@ -210,17 +217,35 @@ class CNN(nn.Module):
 ## (adapted from python 3, and gray scale images)
 
 DROPOUT = 0.5
+PAD_MODE = 'reflect'
+
+class Conv2dPadSame(nn.Conv2d):
+
+    def __init__(self, pad_mode, *args):
+        super(Conv2dPadSame, self).__init__(*args)
+        self.padding = (0, 0)
+        # padding is last dim, second-to-last dim!
+        self.pad_size = (int(math.floor((self.kernel_size[1] - 1.0) / 2)),
+                         int(math.floor((self.kernel_size[1] - 1.0) / 2)),
+                         int(math.floor((self.kernel_size[0] - 1.0) / 2)),
+                         int(math.floor((self.kernel_size[0] - 1.0) / 2)))
+        self.pad_mode = pad_mode
+
+    def forward(self, x):
+        x = F.pad(x, self.pad_size, self.pad_mode)
+        return super(Conv2dPadSame, self).forward(x)
+
 
 class UNetBlock(nn.Module):
     def __init__(self, filters_in, filters_out):
         super(UNetBlock, self).__init__()
         self.filters_in = filters_in
         self.filters_out = filters_out
-        self.conv1 = nn.Conv2d(filters_in, filters_out, (3, 3), padding=1)
-        #self.norm1 = nn.BatchNorm2d(filters_out)
+        #self.conv1 = nn.Conv2d(filters_in, filters_out, (3, 3), padding=1)
+        self.conv1 = Conv2dPadSame(PAD_MODE, filters_in, filters_out, (3, 3))
         self.norm1 = norm_layer(filters_out, filters_out)
-        self.conv2 = nn.Conv2d(filters_out, filters_out, (3, 3), padding=1)
-        #self.norm2 = nn.BatchNorm2d(filters_out)
+        #self.conv2 = nn.Conv2d(filters_out, filters_out, (3, 3))
+        self.conv2 = Conv2dPadSame(PAD_MODE, filters_out, filters_out, (3, 3))
         self.norm2 = norm_layer(filters_out, filters_out)
 
         self.activation = nn.ReLU(inplace=INPLACE)
@@ -252,8 +277,8 @@ class UNetDownBlock(UNetBlock):
 class UNetUpBlock(UNetBlock):
     def __init__(self, filters_in, filters_out):
         super(UNetUpBlock, self).__init__(filters_in, filters_out)
-        self.upconv = nn.Conv2d(filters_in, filters_in // 2, (3, 3), padding=1)
-        #self.upnorm = nn.BatchNorm2d(filters_in // 2)
+        #self.upconv = nn.Conv2d(filters_in, filters_in // 2, (3, 3), padding=1)
+        self.upconv = Conv2dPadSame(PAD_MODE, filters_in, filters_in // 2, (3, 3))
         self.upnorm = norm_layer(filters_in // 2, filters_in // 2)
 
     def forward(self, x, cross_x):
@@ -282,18 +307,14 @@ class UNet(nn.Module):
             )
             filter_size //= 2
 
-        # new
-        #self.squash_layer = nn.Conv2d(3, 1, stride=1, kernel_size=1, padding=0)
-        #self.data_norm = nn.BatchNorm2d(1)
         self.data_norm = norm_layer(3,3)
-        self.init_layer = nn.Conv2d(3, init_filters, (7, 7), padding=3)
+        #self.init_layer = nn.Conv2d(3, init_filters, (7, 7), padding=3)
+        self.init_layer = Conv2dPadSame(PAD_MODE, 3, init_filters, (3, 3))
         self.activation = nn.ReLU(inplace=INPLACE)
-        #self.init_norm = nn.BatchNorm2d(init_filters)
         self.init_norm = norm_layer(init_filters, init_filters)
         self.dropout = nn.Dropout(DROPOUT)
 
     def forward(self, x):
-        #x = self.squash_layer(x)
         x = self.data_norm(x)
         x = self.init_norm(self.activation(self.init_layer(x)))
 
@@ -311,18 +332,9 @@ class UNet(nn.Module):
 
 class UNetClassify(UNet):
     def __init__(self, *args, **kwargs):
-        init_val = kwargs.pop('init_val', 0.5)
         super(UNetClassify, self).__init__(*args, **kwargs)
-        self.output_layer = nn.Conv2d(self.init_filters, 1, (3, 3), padding=1)
-
-        for name, param in self.named_parameters():
-            typ = name.split('.')[-1]
-            if typ == 'bias':
-                if 'output_layer' in name:
-                    # Init so that the average will end up being init_val
-                    param.data.fill_(-math.log((1-init_val)/init_val))
-                else:
-                    param.data.zero_()
+        #self.output_layer = nn.Conv2d(self.init_filters, 1, (3, 3), padding=1)
+        self.output_layer = Conv2dPadSame(PAD_MODE, self.init_filters, 1, (3, 3))
 
     def forward(self, x):
         x = super(UNetClassify, self).forward(x)
@@ -332,24 +344,15 @@ class UNetClassify(UNet):
 
 class UNetClassifyMulti(UNet):
     def __init__(self, targets, *args, **kwargs):
-        init_val = kwargs.pop('init_val', 0.5)
         super(UNetClassifyMulti, self).__init__(*args, **kwargs)
         self.output_layers = {}
         self.target_names = []
         for target in targets:
-            conv = nn.Conv2d(self.init_filters, 1, (3, 3), padding=1)
+            conv = Conv2dPadSame(PAD_MODE, self.init_filters, 1, (3, 3))
             name = target['name']
             self.target_names.append(name)
             self.add_module(name, conv) # needed such that cuda() etc finds submodules!
 
-        for name, param in self.named_parameters():
-            typ = name.split('.')[-1]
-            if typ == 'bias':
-                if 'output_layer' in name:
-                    # Init so that the average will end up being init_val
-                    param.data.fill_(-math.log((1-init_val)/init_val))
-                else:
-                    param.data.zero_()
 
     def forward(self, x):
         x = super(UNetClassifyMulti, self).forward(x)

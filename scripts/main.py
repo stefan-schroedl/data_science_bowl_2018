@@ -33,7 +33,7 @@ import cv2
 from meter import Meter, NamedMeter
 
 from img_proc import numpy_img_to_torch, torch_img_to_numpy, postprocess_prediction
-from utils import mkdir_p, csv_list, int_list, strip_end, init_logging, get_the_log, set_the_log, clear_log, list_log_keys, insert_log, get_latest_log, get_log, labels_to_rles, get_latest_checkpoint_file, get_checkpoint_file, checkpoint_file_from_dir, moving_average, as_py_scalar, stop_current_instance, get_learning_rate
+from utils import mkdir_p, csv_list, int_list, float_dict, strip_end, init_logging, get_the_log, set_the_log, clear_log, list_log_keys, insert_log, get_latest_log, get_log, labels_to_rles, get_latest_checkpoint_file, get_checkpoint_file, checkpoint_file_from_dir, moving_average, as_py_scalar, stop_current_instance, get_learning_rate
 
 from KNN import *
 
@@ -432,6 +432,8 @@ def make_submission(dset, model, args, pred_field_iou='seg'):
                 ax[j+1].imshow(pred_part)
                 fig.savefig(
                     os.path.join(args.out_dir, 'img_%s.%d.png' % (args.experiment, i)))
+                #fig.savefig(
+                #    os.path.join(args.out_dir, 'img_%s.%s.png' % (args.experiment, str(dset.data_df['size'].iloc[i]))))
             plt.close()
 
     dset.data_df['pred'] = preds
@@ -794,7 +796,8 @@ def main():
     parser.add('--epochs', default=1, type=int, metavar='N', help='number of total epochs to run [default: %(default)s]')
     parser.add('-b', '--batch-size', default=1, type=int, metavar='N', help='mini-batch size [default: %(default)s]')
     parser.add( '--grad-accum', default=1, type=int, metavar='N', help='number of batches between gradient descent [default: %(default)s]')
-    parser.add('--weight-init', default='kaiming', choices=['kaiming', 'xavier', 'default'], help='weight initialization method default: %(default)s]')
+    parser.add('--init-weight', default='kaiming', choices=['kaiming', 'xavier', 'default'], help='weight initialization method default: %(default)s]')
+    parser.add('--init-output-bias', default='', type=float_dict, help='initialize biases of output layers to match average value, in the form <target name1>:<value1>,<target name2>:<value2>,... ')
     parser.add( '--input-field', type=str, default='images_prep', help='dataset field to pass to model as input [default: %(default)s]')
     parser.add( '--targets', type=csv_list, default='seg:masks_prep_bin:1.0:1.0', help='one or multiple targets, as comma-delimited list of: <name>:<dataset field>:<target_weight>:<class_weight>. class_weight is a weight multiplier for non-zero mask pixels. <target_weight> and <class_weight> are optional. For multiple targets, model is expected to return dictionary of target names [default: %(default)s]')
     parser.add( '--criterion', '-C', default='bce', choices=[ 'mse', 'bce', 'jaccard', 'dice'], help='type of loss function [default: %(default)s]')
@@ -897,8 +900,8 @@ def main():
         #model = CNN(32)
         #model = UNetClassify(layers=4, init_filters=16)
         model = UNetClassifyMulti(targets, layers=4, init_filters=16)
-        if args.weight_init != 'default':
-            init_weights(model, args.weight_init)
+        if args.init_weight != 'default' or len(args.init_output_bias) > 0:
+            init_weights(model, args.init_weight, args.init_output_bias)
         model = dev(model)
     else:
         raise ValueError("Only supported models are cnn or knn")

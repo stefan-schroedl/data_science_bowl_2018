@@ -230,6 +230,21 @@ def int_list(init):
     return l
 
 
+def float_dict(init):
+    l = [x.strip() for x in init.split(',') if len(x)]
+    ret = {}
+    for x in l:
+        parts = x.split(':')
+        if len(parts) != 2:
+            raise ValueError('invalid specification: %s' % x)
+        try:
+            v = float(parts[1])
+            ret[parts[0].strip()] = v
+        except:
+            raise ValueError('invalid specification: %s' % x)
+    return ret
+
+
 def mkdir_p(path):
     try:
         os.makedirs(path)
