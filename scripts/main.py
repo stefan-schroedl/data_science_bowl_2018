@@ -12,6 +12,7 @@ import logging
 import math
 from glob import glob
 from collections import OrderedDict
+import subprocess
 
 from tqdm import tqdm
 
@@ -601,6 +602,8 @@ def train_cnn(train_loader,
         validated = False  # when doing grad accum, don't print validation results twice
         for i in range(it - num_acc + 1, it + 1):
             if i % eval_every == 0 and not validated:
+                if  global_state['args'].cuda > 0:
+                    stats_train.update('gpu_mem', get_gpu_used_memory())
                 stats_valid.reset()
                 validate(stats_valid, valid_loader, targets, model, global_state['args'].input_field,
                          instance_weight_field=None, calc_iou=True)
@@ -702,6 +705,9 @@ def epoch_logging_message(global_state, targets, stats_train, stats_valid, len_t
 
         msg += '\tepoch time=%d\tval time=%d\t sec/ex=%.2f\t train sec/ex=%.2f\tvalid sec/ex=%.2f' % (time_total, time_val, 1.0 * time_total / len_train, 1.0 * (time_total - time_val) / len_train, 1.0 * time_val / (n_val * len_valid) if n_val * len_valid > 0 else 0.0)
 
+    if  global_state['args'].cuda > 0 and stats_train['gpu_mem'].count > 0:
+        msg += '\tgpu_mem=%d' % stats_train['gpu_mem'].avg
+
     return msg
 
 
@@ -731,6 +737,27 @@ def init_cuda(benchmark):
 
     print '\t\ttorch.cuda.device_count()   =', torch.cuda.device_count()
     print '\t\ttorch.cuda.current_device() =', torch.cuda.current_device()
+
+
+# https://stackoverflow.com/questions/49595663/find-a-gpu-with-enough-memory
+def get_gpu_used_memory():
+    """Get the current gpu usage.
+
+    Returns
+    -------
+    usage: dict
+        Keys are device ids as integers.
+        Values are memory usage as integers in MB.
+    """
+    result = subprocess.check_output(
+        [
+            'nvidia-smi', '--query-gpu=memory.used',
+            '--format=csv,nounits,noheader'
+        ])
+    # Convert lines into a dictionary
+    gpu_memory = [int(x) for x in result.strip().split('\n')]
+    gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
+    return gpu_memory_map[torch.cuda.current_device()]
 
 
 def parse_targets(args):
@@ -829,7 +856,7 @@ def main():
     parser.add('-j', '--workers', default=1, type=int, metavar='N', help='number of data loader workers [default: %(default)s]')
     parser.add('--cuda', type=int, default=0, help='use cuda [default: %(default)s]')
     parser.add( '--cuda-benchmark', type=int, default=0, help='use cuda benchmark mode [default: %(default)s]')
-    parser.add('--stop-instance-after',metavar='SEC', type=int, default=-1, help='when running on AWS, stop the instance after that many seconds, or no exit')
+    parser.add('--stop-instance-after',metavar='SEC', type=int, default=2592000, help='wen running on AWS, stop the instance after that many seconds')
 
     args = parser.parse_args()
 
@@ -1110,7 +1137,7 @@ def main():
             time_end = time.time()
             time_total = time_end - time_start
             logging.info('[%d, %d] total running time: %d seconds' % (global_state['epoch'], global_state['it'], time_total))
-            if args.stop_instance_after > 0 and time_total > args.stop_instance_after:
+            if time_total > args.stop_instance_after:
                 ret = stop_current_instance(False)
                 logging.info(ret)
                 return 0
@@ -1214,10 +1241,6 @@ def main():
     msg = 'done with epoch %d' % global_state['epoch']
     print msg
     logging.info(msg)
-    if args.stop_instance_after > 0:
-        ret = stop_current_instance(False)
-        logging.info(ret)
-        return 0
 
 
 if __name__ == '__main__':
