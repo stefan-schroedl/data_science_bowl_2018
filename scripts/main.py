@@ -1241,6 +1241,11 @@ def main():
     msg = 'done with epoch %d' % global_state['epoch']
     print msg
     logging.info(msg)
+    logging.info(msg)
+    if args.stop_instance_after > 0:
+        ret = stop_current_instance(False)
+        logging.info(ret)
+        return 0
 
 
 if __name__ == '__main__':
