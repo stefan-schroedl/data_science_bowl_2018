@@ -62,9 +62,21 @@ def torch_img_to_numpy(t):
 
 
 def numpy_img_to_torch(n, unsqueeze=False):
-    n = np.ascontiguousarray(n)
+
     # to avoid 'negative stride' error -
     # see https://discuss.pytorch.org/t/problem-with-reading-pfm-image/2924
+    n = np.ascontiguousarray(n)
+
+    mi = np.min(n)
+    ma = np.max(n)
+
+    if mi < 0.0:
+        logging.warning('image values out of range: [%f %f]' % (mi, ma))
+        n -= mi
+    if ma > 255.0:
+        logging.warning('image values out of range: [%f %f]' % (mi, ma))
+        n = (1.0 * n / np.max(n) * 255.0).astype(np.uint8)
+
     if n.ndim == 2:
         n = np.expand_dims(n, 2)
     if n.ndim == 3 and n.shape[2] == 1:
