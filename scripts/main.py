@@ -829,7 +829,7 @@ def main():
     parser.add('-j', '--workers', default=1, type=int, metavar='N', help='number of data loader workers [default: %(default)s]')
     parser.add('--cuda', type=int, default=0, help='use cuda [default: %(default)s]')
     parser.add( '--cuda-benchmark', type=int, default=0, help='use cuda benchmark mode [default: %(default)s]')
-    parser.add('--stop-instance-after',metavar='SEC', type=int, default=2592000, help='wen running on AWS, stop the instance after that many seconds')
+    parser.add('--stop-instance-after',metavar='SEC', type=int, default=-1, help='when running on AWS, stop the instance after that many seconds, or no exit')
 
     args = parser.parse_args()
 
@@ -1110,7 +1110,7 @@ def main():
             time_end = time.time()
             time_total = time_end - time_start
             logging.info('[%d, %d] total running time: %d seconds' % (global_state['epoch'], global_state['it'], time_total))
-            if time_total > args.stop_instance_after:
+            if args.stop_instance_after > 0 and time_total > args.stop_instance_after:
                 ret = stop_current_instance(False)
                 logging.info(ret)
                 return 0
@@ -1214,6 +1214,10 @@ def main():
     msg = 'done with epoch %d' % global_state['epoch']
     print msg
     logging.info(msg)
+    if args.stop_instance_after > 0:
+        ret = stop_current_instance(False)
+        logging.info(ret)
+        return 0
 
 
 if __name__ == '__main__':
