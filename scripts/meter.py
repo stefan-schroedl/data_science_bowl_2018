@@ -21,11 +21,11 @@ class Meter(object):
 
     def reset(self):
         self.count = 0
-        self.last = None
-        self.min = None
-        self.max = None
-        self.sum = None
-        self.sum2 = None
+        self.last = float('nan')
+        self.min = float('inf')
+        self.max = -float('inf')
+        self.sum = 0.0
+        self.sum2 = 0.0
 
     def __str__(self):
         return 'Meter(count={}, last={}, min={}, max={}, sum={}, sum2={})'.format(str(self.count), str(self.last), str(self.min), str(self.max), str(self.sum), str(self.sum2))
@@ -37,7 +37,7 @@ class Meter(object):
             # add stats from other object
             # note: try to preserve types!
             self.last = obj.last
-            if self.sum is None:
+            if self.count == 0:
                 self.count = obj.count * n
                 self.min = obj.min
                 self.max = obj.max
@@ -52,7 +52,7 @@ class Meter(object):
 
         elif is_number(obj):
             self.last = obj
-            if self.sum is None:
+            if self.count == 0:
                 self.count = n
                 self.min = obj
                 self.max = obj

@@ -697,10 +697,11 @@ def epoch_logging_message(global_state, targets, stats_train, stats_valid, len_t
 
     if len_train is not None and len_valid is not None:
         time_total = stats_train['time'].sum
-        time_val = stats_valid['time'].avg
+        time_val = stats_valid['time'].sum
         n_val = stats_valid['time'].count
 
         msg += '\tepoch time=%d\tval time=%d\t sec/ex=%.2f\t train sec/ex=%.2f\tvalid sec/ex=%.2f' % (time_total, time_val, 1.0 * time_total / len_train, 1.0 * (time_total - time_val) / len_train, 1.0 * time_val / (n_val * len_valid) if n_val * len_valid > 0 else 0.0)
+
     return msg
 
 
