@@ -81,14 +81,14 @@ class NucleusDataset(Dataset):
         self.is_preprocessed = False
 
         if value == 'train':
-            self.augment = affine_augmentation()
+            self.augment = affine_augmentation(self.crop_size)
             self.augment_color = color_augmentation()
         else:
             self.augment = noop_augmentation()
             self.augment_color = noop_augmentation()
 
 
-    def __init__(self, root_dir=None, stage_name=None, group_name=None, dset_type='train'):
+    def __init__(self, root_dir=None, stage_name=None, group_name=None, dset_type='train', crop_size=None):
         """
         Read all images and masks into memory.
 
@@ -103,6 +103,7 @@ class NucleusDataset(Dataset):
         """
 
         self.root_dir = root_dir
+        self.crop_size = crop_size
         self.dset_type = dset_type
         self.is_preprocessed = False
 
@@ -276,10 +277,10 @@ class NucleusDataset(Dataset):
                 options['stratify'] = self.data_df['images'].map(lambda x: '{}'.format(x.size))
 
         df_train, df_valid = train_test_split_sk(self.data_df, **options)
-        dset_train = NucleusDataset(dset_type='train')
+        dset_train = NucleusDataset(dset_type='train', crop_size=self.crop_size)
         dset_train.data_df = df_train
 
-        dset_valid = NucleusDataset(dset_type='valid')
+        dset_valid = NucleusDataset(dset_type='valid', crop_size=self.crop_size)
         dset_valid.data_df = df_valid
 
         return dset_train, dset_valid

@@ -13,6 +13,7 @@ import cv2
 
 import imgaug as ia
 from imgaug import augmenters as iaa
+from five_crop_aug import FiveCrop
 
 import skimage
 from skimage.color import rgb2grey
@@ -346,22 +347,21 @@ def get_contour(img):
 ########
 # from https://github.com/neptune-ml/open-solution-data-science-bowl-2018/wiki
 
-def affine_augmentation():
+def affine_augmentation(size):
     return iaa.Sequential([
         # General
         iaa.SomeOf((1, 2),
                    [iaa.Fliplr(0.5),
                     iaa.Flipud(0.5),
-                    iaa.Affine(rotate=(0, 360),
-                               translate_percent=(-0.1, 0.1),
-                               mode='symmetric'),
-                    iaa.CropAndPad(percent=(-0.25, 0.25), pad_cval=0)
+                    iaa.Affine(rotate=(-45, 45), mode='symmetric', order=[0, 1]),
+                    iaa.Affine(scale=(.8, 1.2), mode='symmetric', order=[0, 1])
+                    #iaa.CropAndPad(percent=(-0.25, 0.25), pad_cval=0)
                     ]),
         # Deformations
         # WARNING: PiecewiseAffine basically erases contour lines!!!
         # iaa.PiecewiseAffine(scale=(0.00, 0.06))
-        iaa.Affine(scale=(.8, 1.2), mode='symmetric', order=[0, 1])
-    ], random_order=True)
+        FiveCrop(size)
+    ])
 
 
 def color_augmentation():

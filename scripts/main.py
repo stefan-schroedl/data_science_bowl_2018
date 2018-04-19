@@ -791,6 +791,7 @@ def main():
     parser.add('--data', '-d', metavar='DIR', required=True, help='path to dataset')
     parser.add('--stage', '-s', default='stage1', help='stage [default: %(default)s]')
     parser.add('--group', '-g', default='train', help='group name [default: %(default)s]')
+    parser.add('--crop-size', type=int_list, default='192,192', help='crop images to this size during training [default: %(default)s]')
     parser.add('--valid-fraction', '-v', default=0.25, type=float, help='validation set fraction [default: %(default)s]')
     parser.add( '--stratify', type=int, default=1, help='stratify train/test split according to image size [default: %(default)s]')
     parser.add('--epochs', default=1, type=int, metavar='N', help='number of total epochs to run [default: %(default)s]')
@@ -994,7 +995,8 @@ def main():
             args.data,
             stage_name=args.stage,
             group_name=args.group,
-            dset_type=dset_type)
+            dset_type=dset_type,
+            crop_size=args.crop_size)
     timer = timeit.Timer(load_data)
     t, dset = timer.timeit(number=1)
     logging.info('load time: %.1f\n' % t)
