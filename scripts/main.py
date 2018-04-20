@@ -233,10 +233,10 @@ def dev(x):
 def run_model(model, input, train=True):
     if train:
         model.train()
-        input = Variable(dev(input), requires_grad=False)
+        input = dev(Variable(input, requires_grad=False))
     else:
         model.eval()
-        input = Variable(dev(input), volatile=True)
+        input = dev(Variable(input, volatile=True))
     return model(input)
 
 
@@ -308,7 +308,7 @@ def apply_criteria(data_row,
 
         name = target_spec['name']
         criterion = target_spec['crit']
-        target = Variable(dev(data_row[target_spec['col']]), requires_grad=False)
+        target = dev(Variable(data_row[target_spec['col']], requires_grad=False))
 
         if not name in pred:
             raise ValueError('model did not predict configured target "%s"' % name)
@@ -389,8 +389,8 @@ def validate(
             pred = {}
             for target in targets:
                 # constant mean prediction in the same shape as the target
-                pred[target['name']] = Variable(dev(torch.ones_like(row[target['col']]) * avg_mask[target['col']].avg),
-                                                     volatile=True)
+                pred[target['name']] = dev(Variable(torch.ones_like(row[target['col']]) * avg_mask[target['col']].avg,
+                                                     volatile=True))
         else:
             pred = run_model(model, row[input_field], train=False)
 
@@ -418,7 +418,7 @@ def make_submission(dset, model, args, pred_field_iou='seg'):
     for i in tqdm(range(len(dset.data_df))):
         img = dset.data_df[args.input_field].iloc[i]
         pred = model(
-            Variable(dev(numpy_img_to_torch(img, True)), volatile=True))
+            dev(Variable(numpy_img_to_torch(img, True)), volatile=True))
 
         pred_l, pred_seg = postprocess_prediction(
             pred[pred_field_iou], max_clusters_for_dilation=1e20)  # highest precision

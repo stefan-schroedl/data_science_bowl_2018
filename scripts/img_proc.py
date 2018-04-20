@@ -366,7 +366,7 @@ def affine_augmentation(size):
                    [iaa.Fliplr(0.5),
                     iaa.Flipud(0.5),
                     iaa.Affine(rotate=(-45, 45), mode='symmetric', order=[0, 1]),
-                    iaa.Affine(scale=(.8, 1.2), mode='symmetric', order=[0, 1])
+                    iaa.Affine(scale=(.6, 1.4), mode='symmetric', order=[0, 1])
                     #iaa.CropAndPad(percent=(-0.25, 0.25), pad_cval=0)
                     ]),
         # Deformations
