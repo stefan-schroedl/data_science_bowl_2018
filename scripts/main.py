@@ -240,23 +240,31 @@ def run_model(model, input, train=True):
     return model(input)
 
 
-def apply_weights(data_row, targets, meter, instance_weight_field):
+def apply_weights(data_row, targets, instance_weight_field, use_class_weights, meter):
 
     """set instance and class weights for targets"""
 
-    if instance_weight_field is None:
-        batch_size = data_row[targets[0]['col']].size()[0]
-        w = torch.ones(batch_size, 1)
+    if instance_weight_field is None and not use_class_weights:
+        w = torch.ones(1)
     else:
-        w = data_row[instance_weight_field]
-        for i in range(w.size()[0]):
-            meter.update(instance_weight_field, as_py_scalar(w[i]))
+        if instance_weight_field is None:
+            batch_size = data_row[targets[0]['col']].size()[0]
+            w = torch.ones(batch_size, 1)
+        else:
+            w = data_row[instance_weight_field]
 
-    # make size broadcastable with batch dimension
-    w = dev(w).view(-1, 1, 1, 1)
+            for i in range(w.size()[0]):
+                meter.update(instance_weight_field, as_py_scalar(w[i]))
+
+        # make size broadcastable with batch dimension
+        w = w.view(-1, 1, 1, 1)
+
+    w = dev(w)
+
+    # apply class weight
 
     for target in targets:
-        if target['w_class'] == 1.0:
+        if not use_class_weights or target['w_class'] == 1.0:
             target['crit'].weight = w
         else:
             t = data_row[target['col']]
@@ -271,6 +279,7 @@ def apply_criteria(data_row,
                    targets,
                    meter,
                    instance_weight_field=None,
+                   use_class_weights=False,
                    calc_iou=False,
                    pred_field_iou='seg',
                    target_field_iou='masks_prep',
@@ -289,7 +298,7 @@ def apply_criteria(data_row,
 
     # set weights in criteria
 
-    apply_weights(data_row, targets, meter, instance_weight_field)
+    apply_weights(data_row, targets, instance_weight_field, use_class_weights, meter)
 
 
     # apply criteria
@@ -303,6 +312,7 @@ def apply_criteria(data_row,
 
         if not name in pred:
             raise ValueError('model did not predict configured target "%s"' % name)
+
         l = criterion(pred[name], target)
         losses[name] = l
         meter.update(name, as_py_scalar(l))
@@ -347,6 +357,7 @@ def validate(
         model,
         input_field,
         instance_weight_field=None,
+        use_class_weights=False,
         calc_iou=False,
         max_clusters_for_dilation=100,
         calc_baseline=False,
@@ -388,6 +399,7 @@ def validate(
                                     targets,
                                     stats,
                                     instance_weight_field=instance_weight_field,
+                                    use_class_weights=use_class_weights,
                                     calc_iou=calc_iou,
                                     pred_field_iou='seg',
                                     target_field_iou='masks_prep',
@@ -546,6 +558,7 @@ def train_cnn(train_loader,
                                         targets,
                                         stats_train,
                                         instance_weight_field=global_state['args'].instance_weights,
+                                        use_class_weights=True,
                                         calc_iou=True,
                                         pred_field_iou='seg',
                                         target_field_iou='masks_prep',
@@ -605,8 +618,9 @@ def train_cnn(train_loader,
                 if  global_state['args'].cuda > 0:
                     stats_train.update('gpu_mem', get_gpu_used_memory())
                 stats_valid.reset()
+                # don't apply instance and class weights during evaluation
                 validate(stats_valid, valid_loader, targets, model, global_state['args'].input_field,
-                         instance_weight_field=None, calc_iou=True)
+                         instance_weight_field=None, use_class_weights=False, calc_iou=True)
                 time_valid.update(stats_valid['time'])
                 for k,v in stats_valid.items():
                     insert_log(i, 'valid_avg_%s' % k, v.avg)
@@ -1084,11 +1098,11 @@ def main():
 
         stats_train = NamedMeter()
         validate(stats_train, train_loader, targets, model, global_state['args'].input_field, instance_weight_field=None,
-                 calc_iou = (args.do == 'score'), max_clusters_for_dilation=max_clusters, calc_baseline = (args.do == 'baseline'), desc='train')
+                 use_class_weights=False, calc_iou = (args.do == 'score'), max_clusters_for_dilation=max_clusters, calc_baseline = (args.do == 'baseline'), desc='train')
 
         stats_valid = NamedMeter()
         validate(stats_valid, valid_loader, targets, model, global_state['args'].input_field, instance_weight_field=None,
-                 calc_iou = (args.do == 'score'), max_clusters_for_dilation=max_clusters, desc='valid')
+                 use_class_weights=False, calc_iou = (args.do == 'score'), max_clusters_for_dilation=max_clusters, desc='valid')
         msg = epoch_logging_message(global_state, targets, stats_train, stats_valid)
         logging.info(msg)
         print msg
