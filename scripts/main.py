@@ -613,7 +613,7 @@ def train_cnn(train_loader,
 
         validated = False  # when doing grad accum, don't print validation results twice
         for i in range(it - num_acc + 1, it + 1):
-            if i % eval_every == 0 and not validated:
+            if not validated and ((eval_every == 0 and i == it_last) or (eval_every > 0 and i % eval_every == 0)):
                 if  global_state['args'].cuda > 0:
                     stats_train.update('gpu_mem', get_gpu_used_memory())
                 # note: without resetting stats_valid here, we are averaging over multiple validations
@@ -631,13 +631,13 @@ def train_cnn(train_loader,
             iou = get_latest_log('valid_avg_iou', float('nan'))[0]
             l = get_latest_log('valid_avg_loss', float('nan'))[0]
 
-            if i % print_every == 0:
+            if  (print_every == 0 and i == it_last) or (print_every > 0 and i % print_every == 0):
 
                 logging.info('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f\tvalid iou: %.3f\tlr: %g' %
                     (epoch, i, train_loss, l, iou, global_state['lr']))
                 save_plot(os.path.join(global_state['args'].out_dir, 'progress.png'), global_state['args'].experiment)
 
-            if i % save_every == 0:
+            if  (save_every == 0 and i == it_last) or (save_every > 0 and i % save_every == 0):
                 is_best = False
                 # smooth values over iterations
                 if iou > 0.0:
@@ -865,9 +865,9 @@ def main():
     parser.add( '--scheduler_milestones', type=int_list, default='200', help='list of epoch milestones for multistep scheduler')
     parser.add( '--switch-to-lbfgs', default=0, type=int, metavar='N', help='if lr scheduler reduces rate, switch to lbfgs [default: %(default)s]')
     parser.add( '--clip-gradient', default=0.25, type=float, metavar='C', help='clip excessive gradients during training [default: %(default)s]')
-    parser.add('--print-every', '-p', default=20, type=int, metavar='N', help='print frequency [default: %(default)s]')
-    parser.add('--save-every', '-S', default=50, type=int, metavar='N', help='save frequency [default: %(default)s]')
-    parser.add('--eval-every', default=100, type=int, metavar='N', help='eval frequency [default: %(default)s]')
+    parser.add('--print-every', '-p', default=0, type=int, metavar='N', help='print frequency. if 0, print after each epoch [default: %(default)s]')
+    parser.add('--save-every', '-S', default=0, type=int, metavar='N', help='save frequency. if 0, save after each epoch [default: %(default)s]')
+    parser.add('--eval-every', default=0, type=int, metavar='N', help='eval frequency. if 0, eval after each epoch [default: %(default)s]')
     parser.add('--random-seed', type=int, default=2018, help='set random number generator seed [default: %(default)s]')
     parser.add('--verbose', '-V', type=int, default=0, help='verbose logging')
     parser.add('--log-file', help='write logging output to file')
