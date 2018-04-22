@@ -521,7 +521,6 @@ def train_cnn(train_loader,
               global_state):
 
     time_start = time.time()
-    time_valid = Meter()
 
     epoch = global_state['epoch']
 
@@ -617,14 +616,16 @@ def train_cnn(train_loader,
             if i % eval_every == 0 and not validated:
                 if  global_state['args'].cuda > 0:
                     stats_train.update('gpu_mem', get_gpu_used_memory())
-                stats_valid.reset()
-                # don't apply instance and class weights during evaluation
+                # note: without resetting stats_valid here, we are averaging over multiple validations
+                # over the epoch, each validation being an average over all examples itself
+                # stats_valid.reset()
+
+                # note: don't apply instance and class weights during evaluation
                 validate(stats_valid, valid_loader, targets, model, global_state['args'].input_field,
                          instance_weight_field=None, use_class_weights=False, calc_iou=True)
-                time_valid.update(stats_valid['time'])
-                for k,v in stats_valid.items():
-                    insert_log(i, 'valid_avg_%s' % k, v.avg)
-                    insert_log(i, 'valid_std_%s' % k, v.std)
+                #for k,v in stats_valid.items():
+                #    insert_log(i, 'valid_avg_%s' % k, v.avg)
+                #    insert_log(i, 'valid_std_%s' % k, v.std)
                 validated = True
 
             iou = get_latest_log('valid_avg_iou', float('nan'))[0]
@@ -665,6 +666,9 @@ def train_cnn(train_loader,
     for k,v in stats_train.items():
         insert_log(it, 'train_avg_%s' % k, v.avg)
         insert_log(it, 'train_std_%s' % k, v.std)
+    for k,v in stats_valid.items():
+        insert_log(it, 'valid_avg_%s' % k, v.avg)
+        insert_log(it, 'valid_std_%s' % k, v.std)
 
     insert_log(it, 'lr', global_state['lr'])
 
@@ -717,7 +721,7 @@ def epoch_logging_message(global_state, targets, stats_train, stats_valid, len_t
         time_val = stats_valid['time'].sum
         n_val = stats_valid['time'].count
 
-        msg += '\tepoch time=%d\tval time=%d\t sec/ex=%.2f\t train sec/ex=%.2f\tvalid sec/ex=%.2f' % (time_total, time_val, 1.0 * time_total / len_train, 1.0 * (time_total - time_val) / len_train, 1.0 * time_val / (n_val * len_valid) if n_val * len_valid > 0 else 0.0)
+        msg += '\tepoch time=%d\tval time=%d\t sec/ex=%.3g\t train sec/ex=%.3g\tvalid sec/ex=%.3g' % (time_total, time_val, 1.0 * time_total / len_train, 1.0 * (time_total - time_val) / len_train, 1.0 * time_val / (n_val * len_valid) if n_val * len_valid > 0 else 0.0)
 
     if  global_state['args'].cuda > 0 and stats_train['gpu_mem'].count > 0:
         msg += '\tgpu_mem=%d' % stats_train['gpu_mem'].avg

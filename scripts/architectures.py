@@ -15,7 +15,7 @@ from groupnorm import GroupNorm
 
 INPLACE = True
 USE_GROUPNORM = True
-
+IMG_CHANNELS = 3
 
 def norm_layer(num_filters, dummy=None):
     if USE_GROUPNORM:
@@ -307,9 +307,9 @@ class UNet(nn.Module):
             )
             filter_size //= 2
 
-        self.data_norm = norm_layer(3,3)
+        self.data_norm = norm_layer(IMG_CHANNELS,IMG_CHANNELS)
         #self.init_layer = nn.Conv2d(3, init_filters, (7, 7), padding=3)
-        self.init_layer = Conv2dPadSame(PAD_MODE, 3, init_filters, (3, 3))
+        self.init_layer = Conv2dPadSame(PAD_MODE, IMG_CHANNELS, init_filters, (3, 3))
         self.activation = nn.ReLU(inplace=INPLACE)
         self.init_norm = norm_layer(init_filters, init_filters)
         self.dropout = nn.Dropout(DROPOUT)
