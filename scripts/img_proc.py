@@ -292,22 +292,32 @@ def redilate_mask(mask_seg, sz=2, skip_clusters=1e20):
 # training images and masks can be resized, but validation and test images cannot
 
 def preprocess_img(x, dset_type):
-    if dset_type == 'train':
-        w = 512
-        h = 512
-        x = transform.resize(x, (w, h))
-        # transform.resize() changes type to float!
-        x = img_as_ubyte(x)
+    #if dset_type == 'train':
+    #    w = 512
+    #    h = 512
+    #    x = transform.resize(x, (w, h))
+    #    # transform.resize() changes type to float!
+    #    x = img_as_ubyte(x)
     return x
+
+def preprocess_img_grey(img, do_inversion=True, invert_thresh=0.5):
+    img = img_as_ubyte(rgb2grey(img))
+    if do_inversion:
+        thresh = threshold_otsu(img)
+        img_th = img > thresh
+        if len(np.where(img_th)[0]) > invert_thresh * img.size:
+            logging.info('invert')
+            img = invert(img)
+    return img
 
 
 def preprocess_mask(x, dset_type):
     if dset_type == 'train':
-        w = 512
-        h = 512
-        x = transform.resize(x, (w, h))
-        # transform.resize() changes type to float!
-        x = img_as_ubyte(x)
+    #    w = 512
+    #    h = 512
+    #    x = transform.resize(x, (w, h))
+    #    # transform.resize() changes type to float!
+    #    x = img_as_ubyte(x)
         x = erode_mask(x)
     return x
 
