@@ -33,7 +33,7 @@ import cv2
 
 from meter import Meter, NamedMeter
 
-from img_proc import numpy_img_to_torch, torch_img_to_numpy, postprocess_prediction
+from img_proc import numpy_img_to_torch, torch_img_to_numpy, torch_flip, torch_rot90, postprocess_prediction
 from utils import mkdir_p, csv_list, int_list, float_dict, strip_end, init_logging, get_the_log, set_the_log, clear_log, list_log_keys, insert_log, get_latest_log, get_log, labels_to_rles, get_latest_checkpoint_file, get_checkpoint_file, checkpoint_file_from_dir, moving_average, as_py_scalar, stop_current_instance, get_learning_rate
 
 from KNN import *
@@ -230,14 +230,39 @@ def dev(x):
     return x
 
 
-def run_model(model, input, train=True):
+def make_var(x, train=True):
+    if train:
+        return dev(Variable(x, requires_grad=False))
+    else:
+        return dev(Variable(x, volatile=True))
+
+
+def run_model(model, input, train=True, tta=False):
+
     if train:
         model.train()
-        input = dev(Variable(input, requires_grad=False))
     else:
         model.eval()
-        input = dev(Variable(input, volatile=True))
-    return model(input)
+
+    if not tta:
+        return model(make_var(input, train))
+
+    # generate all 8 symmetric images and average predictions
+    # TODO use a minibatch for predictions
+
+    output = NamedMeter()
+    for fl in [5, -1]: # no flip, horizontal flip
+        input_flip = torch_flip(input, fl)
+        for r in range(4):
+            input_trans = torch_rot90(input_flip, r)
+            pred = model(make_var(input_trans, train))
+            for k in pred:
+                rot_inv = torch_flip(torch_rot90(pred[k].data, -r), fl)
+                output.update(k, rot_inv)
+
+    output = dict([(k, make_var(v.avg, train)) for k,v in output.items()])
+
+    return output
 
 
 def apply_weights(data_row, targets, instance_weight_field, use_class_weights, meter):
@@ -308,7 +333,7 @@ def apply_criteria(data_row,
 
         name = target_spec['name']
         criterion = target_spec['crit']
-        target = dev(Variable(data_row[target_spec['col']], requires_grad=False))
+        target = make_var(data_row[target_spec['col']])
 
         if not name in pred:
             raise ValueError('model did not predict configured target "%s"' % name)
@@ -361,6 +386,7 @@ def validate(
         calc_iou=False,
         max_clusters_for_dilation=100,
         calc_baseline=False,
+        tta=False,
         desc='valid'):
     # calc_baseline=True -> calculate loss when predicting constant global
     # average
@@ -368,6 +394,7 @@ def validate(
     time_start = time.time()
 
     model.eval()
+
 
     avg_mask = NamedMeter()
 
@@ -380,7 +407,6 @@ def validate(
             print msg
             logging.info(msg)
 
-
     for i, row in tqdm(enumerate(loader), desc=desc, total=loader.__len__()):
 
         transfer_data(row, targets, input_field, instance_weight_field)
@@ -389,10 +415,9 @@ def validate(
             pred = {}
             for target in targets:
                 # constant mean prediction in the same shape as the target
-                pred[target['name']] = dev(Variable(torch.ones_like(row[target['col']]) * avg_mask[target['col']].avg,
-                                                     volatile=True))
+                pred[target['name']] = make_var(torch.ones_like(row[target['col']]) * avg_mask[target['col']].avg, False)
         else:
-            pred = run_model(model, row[input_field], train=False)
+            pred = run_model(model, row[input_field], train=False, tta=tta)
 
         total_loss = apply_criteria(row,
                                     pred,
@@ -417,8 +442,7 @@ def make_submission(dset, model, args, pred_field_iou='seg'):
     preds = []
     for i in tqdm(range(len(dset.data_df))):
         img = dset.data_df[args.input_field].iloc[i]
-        pred = model(
-            dev(Variable(numpy_img_to_torch(img, True)), volatile=True))
+        pred =run_model(model, numpy_img_to_torch(img, True), train=False, tta=args.tta)
 
         pred_l, pred_seg = postprocess_prediction(
             pred[pred_field_iou], max_clusters_for_dilation=1e20)  # highest precision
@@ -622,7 +646,7 @@ def train_cnn(train_loader,
 
                 # note: don't apply instance and class weights during evaluation
                 validate(stats_valid, valid_loader, targets, model, global_state['args'].input_field,
-                         instance_weight_field=None, use_class_weights=False, calc_iou=True)
+                         instance_weight_field=None, use_class_weights=False, calc_iou=True, tta = (global_state['args'].tta > 0))
                 #for k,v in stats_valid.items():
                 #    insert_log(i, 'valid_avg_%s' % k, v.avg)
                 #    insert_log(i, 'valid_std_%s' % k, v.std)
@@ -830,10 +854,11 @@ def main():
     parser.add('--experiment', '-e', required=True, help='experiment name')
     parser.add('--out-dir', '-o', help='output directory')
     parser.add('--resume', type=str, metavar='PATH', help='path to latest checkpoint')
-    parser.add( '--override-model-opts', type=csv_list, default='override-model-opts,resume,experiment,out-dir,save-every,print-every,eval-every,scheduler,log-file,do,stop-instance-after', help='when resuming, change these options [default: %(default)s]')
+    parser.add( '--override-model-opts', type=csv_list, default='override-model-opts,resume,experiment,out-dir,save-every,print-every,eval-every,scheduler,log-file,do,stop-instance-after,tta', help='when resuming, change these options [default: %(default)s]')
     parser.add('--force-overwrite', type=int, default=0, help='overwrite existing checkpoint, if it exists [default: %(default)s]')
     parser.add( '--do', choices=('train','score','submit','baseline'), default='train', help='mode of operation. score: compute losses and iou over training and validation sets. submit: write output files with run-length encoded predictions. baseline: compute losses with global average as prediction [default: %(default)s]')
     parser.add( '--predictions-file', type=str, help='file name for predictions output')
+    parser.add( '--tta', type=int, default=0, help='use test time augmentation')
     parser.add('--data', '-d', metavar='DIR', required=True, help='path to dataset')
     parser.add('--stage', '-s', default='stage1', help='stage [default: %(default)s]')
     parser.add('--group', '-g', default='train', help='group name [default: %(default)s]')
@@ -1101,12 +1126,12 @@ def main():
         max_clusters =1e20 if args.do == 'score' else 100
 
         stats_train = NamedMeter()
-        validate(stats_train, train_loader, targets, model, global_state['args'].input_field, instance_weight_field=None,
-                 use_class_weights=False, calc_iou = (args.do == 'score'), max_clusters_for_dilation=max_clusters, calc_baseline = (args.do == 'baseline'), desc='train')
-
         stats_valid = NamedMeter()
-        validate(stats_valid, valid_loader, targets, model, global_state['args'].input_field, instance_weight_field=None,
-                 use_class_weights=False, calc_iou = (args.do == 'score'), max_clusters_for_dilation=max_clusters, desc='valid')
+        for loader, stats, desc in zip((train_loader, valid_loader), (stats_train, stats_valid), ('train', 'valid')):
+            validate(stats, loader, targets, model, global_state['args'].input_field, instance_weight_field=None,
+                     use_class_weights=False, calc_iou = (args.do == 'score'), max_clusters_for_dilation=max_clusters,
+                     calc_baseline = (args.do == 'baseline'), tta = (global_state['args'].tta > 0), desc=desc)
+
         msg = epoch_logging_message(global_state, targets, stats_train, stats_valid)
         logging.info(msg)
         print msg

@@ -89,6 +89,36 @@ def numpy_img_to_torch(n, unsqueeze=False):
     return n_conv
 
 
+def torch_flip(t, axis=-1):
+    """
+    reflect a tensor image along axis.
+
+    use axis=-1 (-2) for horizontal (vertical) flips
+    """
+
+    if axis > len(t.size()):
+        return t
+    inv_idx = torch.arange(t.size(axis)-1, -1, -1).long()
+    return t.index_select(axis, inv_idx)
+
+
+def torch_rot90(t, k=0):
+    """rotate a tensor image clockwise k times by 90 degrees"""
+
+    k = k % 4
+    if k == 0:
+        return t
+    if k == 2:
+        return torch_flip(torch_flip(t, -1), -2)
+    idx = range(len(t.size()))
+    idx[-1], idx[-2] = idx[-2], idx[-1]
+    t = t.permute(*idx)
+    if k == 1:
+        return torch_flip(t, -1)
+    if k == 3:
+        return torch_flip(t, -2)
+
+
 def read_img_join_masks(img_id, root='../../input/stage1_train/'):
     img = imread(os.path.join(root, img_id, 'images', img_id + '.png'))
     path = os.path.join(root, img_id, 'masks')

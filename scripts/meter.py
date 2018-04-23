@@ -3,21 +3,21 @@ from __future__ import division
 import math
 from collections import defaultdict
 
-import torch
-
 def is_number(s):
     try:
         float(s) # for int, long and float
-    except ValueError:
+    except:
         return False
     return True
 
 
 class Meter(object):
-    """Computes and stores the average, standard deviation, min, max, and current value of a sequence"""
+    """Computes and stores the average, standard deviation, min, max, and current value of a sequence of numbers, numpy arrays, or torch tensors."""
+
 
     def __init__(self):
         self.reset()
+
 
     def reset(self):
         self.count = 0
@@ -27,12 +27,20 @@ class Meter(object):
         self.sum = 0.0
         self.sum2 = 0.0
 
+
     def __str__(self):
         return 'Meter(count={}, last={}, min={}, max={}, sum={}, sum2={})'.format(str(self.count), str(self.last), str(self.min), str(self.max), str(self.sum), str(self.sum2))
-             
+
+
+    def is_valid_element(self, x):
+        if is_number(x):
+            return True
+        typename = type(x).__name__
+        return typename == 'ndarray' or typename.endswith('Tensor')
+
+
     def update(self, obj, n=1):
-        if isinstance(obj, torch.Tensor) or isinstance(obj, torch.autograd.Variable):
-            raise ValueError('tensor')
+
         if isinstance(obj, Meter):
             # add stats from other object
             # note: try to preserve types!
@@ -50,28 +58,32 @@ class Meter(object):
                 self.sum += obj.sum * n
                 self.sum2 += obj.sum2 * n
 
-        elif is_number(obj):
+        elif self.is_valid_element(obj):
             self.last = obj
             if self.count == 0:
                 self.count = n
-                self.min = obj
-                self.max = obj
+                if is_number(obj):
+                    self.min = obj
+                    self.max = obj
                 self.sum = obj * n
                 self.sum2 = obj * obj * n
             else:
                 self.count += n
-                self.min = min(self.min, obj)
-                self.max = max(self.max, obj)
+                if is_number(obj):
+                    self.min = min(self.min, obj)
+                    self.max = max(self.max, obj)
                 self.sum += obj * n
                 self.sum2 += obj * obj * n
         else:
             raise ValueError('wrong type in Meter.update(): %s' % str(obj))
+
 
     @property
     def avg(self):
         if self.count == 0:
             return float('nan')
         return self.sum / self.count
+
 
     @property
     def std(self):
@@ -88,6 +100,7 @@ class NamedMeter(defaultdict):
     def __init__(self):
         super(NamedMeter, self).__init__(Meter)
 
+
     def __str__(self):
         s = 'NamedMeter(\n'
         for k,v in self.items():
@@ -95,20 +108,20 @@ class NamedMeter(defaultdict):
         s += ')'
         return s
 
+
     def update(self, key, val=None, n=1):
         if key is None:
             raise ValueError('key cannot be None')
         if val is None:
-            if isinstance(key, NamedMeter):
+            if isinstance(key, (dict, NamedMeter)):
                 # add stats from other object
                 for name in key.keys():
                     self[name].update(key[name], n)
             else:
-                raise ValueError('either another NamedMeter, or both key and value needed')
-        elif is_number(val):
-            self[key].update(val, n)
+                raise ValueError('either another NamedMeter, a dictionary, or both key and value needed')
         else:
-            raise ValueError('wrong type in NamedMeter.update(): %s' % str(val))
+            self[key].update(val, n)
+
 
     def reset(self):
         for v in self.values():
@@ -129,4 +142,4 @@ if __name__ == '__main__':
     m.update(m2)
 
     print m['a'].avg
-        
+
