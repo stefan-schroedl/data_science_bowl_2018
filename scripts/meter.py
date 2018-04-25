@@ -5,7 +5,7 @@ from collections import defaultdict
 
 def is_number(s):
     try:
-        float(s) # for int, long and float
+        float(s)  # for int, long and float
     except:
         return False
     return True
@@ -90,7 +90,7 @@ class Meter(object):
         if self.count < 2:
             return float('nan')
         try:
-            return math.sqrt(max(0.0, (self.sum2  - self.sum * self.sum / self.count)) / (self.count - 1))
+            return math.sqrt(max(0.0, (self.sum2 - self.sum * self.sum / self.count)) / (self.count - 1))
         except:
             return float('nan')
 
@@ -103,7 +103,7 @@ class NamedMeter(defaultdict):
 
     def __str__(self):
         s = 'NamedMeter(\n'
-        for k,v in self.items():
+        for k, v in self.items():
             s += '  * ' + str(k) + '\n     ' + str(v) + '\n'
         s += ')'
         return s
@@ -142,4 +142,3 @@ if __name__ == '__main__':
     m.update(m2)
 
     print m['a'].avg
-

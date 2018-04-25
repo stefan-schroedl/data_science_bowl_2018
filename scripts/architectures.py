@@ -13,9 +13,11 @@ from torch.nn.utils import weight_norm
 
 from groupnorm import GroupNorm
 
+
 INPLACE = True
 USE_GROUPNORM = True
 IMG_CHANNELS = 3
+
 
 def norm_layer(num_filters, dummy=None):
     if USE_GROUPNORM:
@@ -40,7 +42,7 @@ def init_weights(net, method='kaiming', output_layer_averages={}):
             if m.bias is not None:
                 init_val = 0.0
                 if name in output_layer_averages:
-                    #  Init so that the average after sigmoid will end up being init_val
+                    #  init so that the average after sigmoid will end up being init_val
                     init_val = output_layer_averages[name]
                     init_val = -math.log((1-init_val)/init_val)
 
@@ -80,6 +82,7 @@ class Flatten(nn.Module):
 
 
 class ImgModDetector(nn.Module):
+    """derive position-independent channels from image, to detect source type"""
     def __init__(self):
         super(ImgModDetector, self).__init__()
         self.layer1 = nn.Sequential(
@@ -101,7 +104,9 @@ class ImgModDetector(nn.Module):
 
         return out
 
+
 class Coarse(nn.Module):
+    """cover large area tp provide multi-resolution context"""
     def __init__(self):
         super(Coarse, self).__init__()
         self.layer1 = nn.Sequential(
@@ -129,9 +134,10 @@ class Coarse(nn.Module):
         return l1out, l2out, l3out
 
 
-class CNN(nn.Module):
+class CNNSimple(nn.Module):
+    """standard fully convolutional model, with image type and context channels"""
     def __init__(self, num_filters=16):
-        super(CNN, self).__init__()
+        super(CNNSimple, self).__init__()
         self.mod = ImgModDetector()
         self.coarse = Coarse()
 
@@ -146,34 +152,28 @@ class CNN(nn.Module):
             nn.Conv2d(3, 3, stride=1, kernel_size=1, padding=0))
 
         self.layer1 = nn.Sequential(
-            #nn.BatchNorm2d(15, affine=affine, momentum=mom),
             norm_layer(15,15),
             nn.Conv2d(15, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU(inplace=INPLACE),
             nn.MaxPool2d(3, stride=1, padding=1))
         self.layer2 = nn.Sequential(
-            #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
             norm_layer(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU(inplace=INPLACE),
             nn.MaxPool2d(3, stride=1, padding=1))
         self.layer3 = nn.Sequential(
-            #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
             norm_layer(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU(inplace=INPLACE))
         self.layer4 = nn.Sequential(
-            #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
             norm_layer(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU(inplace=INPLACE))
         self.layer5 = nn.Sequential(
-            #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
             norm_layer(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU(inplace=INPLACE))
         self.layer6 = nn.Sequential(
-            #nn.BatchNorm2d(num_filters, affine=affine, momentum=mom),
             norm_layer(num_filters, groups),
             nn.Conv2d(num_filters, num_filters, stride=1, kernel_size=3, padding=1),
             nn.ReLU(inplace=INPLACE))
@@ -199,6 +199,8 @@ class CNN(nn.Module):
 
         return out
 
+    # use these functions to inspect intermediate layers
+
     def get_color_adjust(self, x):
         img_tp = self.mod(x)
         img_and_type = torch.cat((x,img_tp),1)
@@ -220,7 +222,7 @@ DROPOUT = 0.5
 PAD_MODE = 'reflect'
 
 class Conv2dPadSame(nn.Conv2d):
-
+    """2D convolution with 'same' padding"""
     def __init__(self, pad_mode, *args):
         super(Conv2dPadSame, self).__init__(*args)
         self.padding = (0, 0)
@@ -241,10 +243,8 @@ class UNetBlock(nn.Module):
         super(UNetBlock, self).__init__()
         self.filters_in = filters_in
         self.filters_out = filters_out
-        #self.conv1 = nn.Conv2d(filters_in, filters_out, (3, 3), padding=1)
         self.conv1 = Conv2dPadSame(PAD_MODE, filters_in, filters_out, (3, 3))
         self.norm1 = norm_layer(filters_out, filters_out)
-        #self.conv2 = nn.Conv2d(filters_out, filters_out, (3, 3))
         self.conv2 = Conv2dPadSame(PAD_MODE, filters_out, filters_out, (3, 3))
         self.norm2 = norm_layer(filters_out, filters_out)
 
@@ -259,9 +259,11 @@ class UNetBlock(nn.Module):
         conved2 = self.norm2(conved2)
         return conved2
 
+
 # note: python pickle doesn't like lambdas!
 def noop(x):
     return x
+
 
 class UNetDownBlock(UNetBlock):
     def __init__(self, filters_in, filters_out, pool=True):
@@ -274,10 +276,10 @@ class UNetDownBlock(UNetBlock):
     def forward(self, x):
         return self.pool(super(UNetDownBlock, self).forward(x))
 
+
 class UNetUpBlock(UNetBlock):
     def __init__(self, filters_in, filters_out):
         super(UNetUpBlock, self).__init__(filters_in, filters_out)
-        #self.upconv = nn.Conv2d(filters_in, filters_in // 2, (3, 3), padding=1)
         self.upconv = Conv2dPadSame(PAD_MODE, filters_in, filters_in // 2, (3, 3))
         self.upnorm = norm_layer(filters_in // 2, filters_in // 2)
 
@@ -286,6 +288,7 @@ class UNetUpBlock(UNetBlock):
         x = self.upnorm(self.activation(self.upconv(x)))
         x = torch.cat((x, cross_x), 1)
         return super(UNetUpBlock, self).forward(x)
+
 
 class UNet(nn.Module):
     def __init__(self, layers, init_filters):
@@ -330,10 +333,10 @@ class UNet(nn.Module):
             x = layer(x, saved_x)
         return x
 
+
 class UNetClassify(UNet):
     def __init__(self, *args, **kwargs):
         super(UNetClassify, self).__init__(*args, **kwargs)
-        #self.output_layer = nn.Conv2d(self.init_filters, 1, (3, 3), padding=1)
         self.output_layer = Conv2dPadSame(PAD_MODE, self.init_filters, 1, (3, 3))
 
     def forward(self, x):

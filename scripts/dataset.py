@@ -69,7 +69,7 @@ class NucleusDataset(Dataset):
 
         if value == 'train':
             sz = None
-            if self.img_size is not None and self.img_size_mode == 'resize':
+            if self.img_size is not None and self.img_size_mode == 'crop':
                 sz = self.img_size
             self.augment = affine_augmentation(sz)
             self.augment_color = color_augmentation()

@@ -19,7 +19,6 @@ from tqdm import tqdm
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-import scipy
 
 import torch
 from torch import optim, nn
@@ -31,38 +30,36 @@ from torch.utils.data import DataLoader
 
 import cv2
 
-from meter import Meter, NamedMeter
+from meter import NamedMeter
 
 from img_proc import numpy_img_to_torch, torch_img_to_numpy, torch_flip, torch_rot90, postprocess_prediction
-from utils import mkdir_p, csv_list, int_list, float_dict, strip_end, init_logging, get_the_log, set_the_log, clear_log, list_log_keys, insert_log, get_latest_log, get_log, labels_to_rles, get_latest_checkpoint_file, get_checkpoint_file, checkpoint_file_from_dir, moving_average, as_py_scalar, stop_current_instance, get_learning_rate
+from utils import mkdir_p, csv_list, int_list, float_dict, strip_end, init_logging, get_the_log, set_the_log, clear_log, insert_log, get_latest_log, get_log, labels_to_rles, get_latest_checkpoint_file, get_checkpoint_file, checkpoint_file_from_dir, moving_average, as_py_scalar, stop_current_instance, get_learning_rate
 
 from KNN import *
 
 from dataset import NucleusDataset
 
-from architectures import CNN, UNetClassify, UNetClassifyMulti, init_weights
+from architectures import CNNSimple, UNetClassify, UNetClassifyMulti, init_weights
 
 import loss
-from loss import iou_metric, union_intersection, precision_at
+from loss import iou_metric
 
 
 class TrainingBlowupError(Exception):
     def __init__(self, message, errors=None):
-
-        # Call the base class constructor with the parameters it needs
         super(TrainingBlowupError, self).__init__(message)
 
-        # Now for your custom code...
         self.errors = errors
 
 
 def save_plot(fname, title=None):
+    """ save a chart of the learning curve"""
     train_loss, train_loss_it = get_log('train_last_loss')
     valid_loss, valid_loss_it = get_log('valid_avg_loss')
     epoch_loss, epoch_loss_it = None, None
     try:
         epoch_loss, epoch_loss_it = get_log('train_avg_loss')
-    except BaseException:
+    except:
         pass
     grad, grad_it = get_log('train_avg_grad')
 
@@ -118,6 +115,12 @@ def save_checkpoint(fname,
                     global_state=None,
                     is_best=False):
 
+    """
+    save model, optimizer, and global state
+
+    note: save both the state_dict and entire model, just in case
+    """
+
     # model.clearState()
     s = {'model_state_dict': model.state_dict(),
          'model': model,
@@ -136,9 +139,16 @@ def save_checkpoint(fname,
 
 
 def load_checkpoint(fname,
-                    model,
+                    model=None,
                     optimizer=None,
                     global_state=None):
+
+    """
+    load model, optimizer, and global state from file.
+
+    if model argument is given, retrieve state dict (as recommended by pytorch).
+    otherwise, retrieve entire model.
+    """
 
     if not os.path.isfile(fname):
         raise ValueError('checkpoint not found: %s', fname)
@@ -150,12 +160,11 @@ def load_checkpoint(fname,
     except BaseException:
         pass
 
-    # if model:
-    #    model.load_state_dict(checkpoint['model_state_dict'])
+    if model:
+        model.load_state_dict(checkpoint['model_state_dict'])
 
-    old_model = None
-    if 'model' in checkpoint:
-        old_model = checkpoint['model']
+    if model is None:
+        model = checkpoint['model']
 
     if optimizer and (not global_state['args'] or not(
             'optim' in global_state['args'].override_model_opts)):
@@ -168,6 +177,8 @@ def load_checkpoint(fname,
 
     if global_state and 'args' in global_state and 'global_state' in checkpoint and 'args' in checkpoint[
             'global_state']:
+
+        # use the saved command line parameters, except for those specified in '--override-model-opts'
         args = global_state['args']
         override = args.override_model_opts
 
@@ -198,7 +209,7 @@ def load_checkpoint(fname,
     logging.info(
         "=> loaded checkpoint '{}' (iteration {})\n".format(
             fname, it))
-    return old_model
+    return model
 
 
 def validate_knn(model, loader, criterion):
@@ -225,9 +236,73 @@ def validate_knn(model, loader, criterion):
     return l
 
 
+def init_cuda(benchmark):
+    if not torch.cuda.is_available():
+        raise ValueError('cuda requested, but not available')
+
+    # uses the inbuilt cudnn auto-tuner to find the fastest convolution algorithms.
+    # note: actually makes it a lot slower on this problem!
+    torch.backends.cudnn.benchmark = benchmark
+    torch.backends.cudnn.enabled = True
+
+    global dev
+    def dev(x): return x.cuda()
+
+    print '\tset cuda environment'
+    print '\t\ttorch.__version__              =', torch.__version__
+    print '\t\ttorch.version.cuda             =', torch.version.cuda
+    print '\t\ttorch.backends.cudnn.version() =', torch.backends.cudnn.version()
+    try:
+        NUM_CUDA_DEVICES = len(
+            os.environ['CUDA_VISIBLE_DEVICES'].split(','))
+        print '\t\tos[\'CUDA_VISIBLE_DEVICES\']  =', os.environ['CUDA_VISIBLE_DEVICES']
+    except Exception:
+        print '\t\tos[\'CUDA_VISIBLE_DEVICES\']  =', 'None'
+        NUM_CUDA_DEVICES = 1
+
+    print '\t\ttorch.cuda.device_count()   =', torch.cuda.device_count()
+    print '\t\ttorch.cuda.current_device() =', torch.cuda.current_device()
+
+
+# https://stackoverflow.com/questions/49595663/find-a-gpu-with-enough-memory
+def get_gpu_used_memory():
+    """Get the current gpu usage.
+
+    Returns
+    -------
+    usage: dict
+        Keys are device ids as integers.
+        Values are memory usage as integers in MB.
+    """
+    result = subprocess.check_output(
+        [
+            'nvidia-smi', '--query-gpu=memory.used',
+            '--format=csv,nounits,noheader'
+        ])
+    # Convert lines into a dictionary
+    gpu_memory = [int(x) for x in result.strip().split('\n')]
+    gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
+    return gpu_memory_map[torch.cuda.current_device()]
+
+
 def dev(x):
-    """transparently choose cpu or gpu"""
+    """transparently move tensors to gpu"""
     return x
+
+
+def transfer_data(row, targets, input_field, instance_weight_field=None):
+    """
+    transfer images and masks to gpu.
+
+    hopefully the transfer can be parallelized with model execution.
+"""
+
+    fields = [input_field]
+    fields.extend([t['col'] for t in targets])
+    if instance_weight_field is not None:
+        fields.append(instance_weight_field)
+    for field in fields:
+        row[field] = dev(row[field])
 
 
 def make_var(x, train=True):
@@ -247,11 +322,12 @@ def run_model(model, input, train=True, tta=False):
     if not tta:
         return model(make_var(input, train))
 
+    # test-time augmentation
     # generate all 8 symmetric images and average predictions
     # TODO use a minibatch for predictions
 
     output = NamedMeter()
-    for fl in [5, -1]: # no flip, horizontal flip
+    for fl in [5, -1]:  # no flip, horizontal flip
         input_flip = torch_flip(input, fl)
         for r in range(4):
             input_trans = torch_rot90(input_flip, r)
@@ -260,7 +336,7 @@ def run_model(model, input, train=True, tta=False):
                 rot_inv = torch_flip(torch_rot90(pred[k].data, -r), fl)
                 output.update(k, rot_inv)
 
-    output = dict([(k, make_var(v.avg, train)) for k,v in output.items()])
+    output = dict([(k, make_var(v.avg, train)) for k, v in output.items()])
 
     return output
 
@@ -360,21 +436,6 @@ def apply_criteria(data_row,
     return total_loss
 
 
-def transfer_data(row, targets, input_field, instance_weight_field=None):
-    """
-    transfer images and masks to gpu.
-
-    hopefully the transfer can be parallelized with model execution.
-"""
-
-    fields = [input_field]
-    fields.extend([t['col'] for t in targets])
-    if instance_weight_field is not None:
-        fields.append(instance_weight_field)
-    for field in fields:
-        row[field] = dev(row[field])
-
-
 def validate(
         stats,
         loader,
@@ -388,17 +449,19 @@ def validate(
         calc_baseline=False,
         tta=False,
         desc='valid'):
-    # calc_baseline=True -> calculate loss when predicting constant global
-    # average
+
+    """
+    Run validation.
+
+    calc_baseline=True -> calculate loss when predicting constant global average
+    """
 
     time_start = time.time()
 
     model.eval()
 
-
-    avg_mask = NamedMeter()
-
     if calc_baseline:
+        avg_mask = NamedMeter()
         for i, row in enumerate(loader):
             for target in targets:
                 avg_mask.update(target['col'], row[target['col']].numpy().mean())
@@ -406,6 +469,7 @@ def validate(
             msg = 'avg for column "%s": %.3g' % (target['col'], avg_mask[target['col']].avg)
             print msg
             logging.info(msg)
+
 
     for i, row in tqdm(enumerate(loader), desc=desc, total=loader.__len__()):
 
@@ -419,22 +483,23 @@ def validate(
         else:
             pred = run_model(model, row[input_field], train=False, tta=tta)
 
-        total_loss = apply_criteria(row,
-                                    pred,
-                                    targets,
-                                    stats,
-                                    instance_weight_field=instance_weight_field,
-                                    use_class_weights=use_class_weights,
-                                    calc_iou=calc_iou,
-                                    pred_field_iou='seg',
-                                    target_field_iou='masks_prep',
-                                    max_clusters_for_dilation=max_clusters_for_dilation)
+        apply_criteria(row,
+                       pred,
+                       targets,
+                       stats,
+                       instance_weight_field=instance_weight_field,
+                       use_class_weights=use_class_weights,
+                       calc_iou=calc_iou,
+                       pred_field_iou='seg',
+                       target_field_iou='masks_prep',
+                       max_clusters_for_dilation=max_clusters_for_dilation)
 
     time_end = time.time()
     stats.update('time', time_end - time_start)
 
 
 def make_submission(dset, model, args, pred_field_iou='seg'):
+    """generate file with run-length encoded predictions as required for kaggle submission"""
 
     dset.preprocess()
     model.eval()
@@ -449,6 +514,7 @@ def make_submission(dset, model, args, pred_field_iou='seg'):
         preds.append(pred_l)
 
         if 1:
+            # generate images for visual inspection
             fig, ax = plt.subplots(1, len(pred)+1, figsize=(50, 50))
             plt.tight_layout()
             ax[0].title.set_text('img')
@@ -469,8 +535,6 @@ def make_submission(dset, model, args, pred_field_iou='seg'):
                 ax[j+1].imshow(pred_part)
                 fig.savefig(
                     os.path.join(args.out_dir, 'img_%s.%d.png' % (args.experiment, i)))
-                #fig.savefig(
-                #    os.path.join(args.out_dir, 'img_%s.%s.png' % (args.experiment, str(dset.data_df['size'].iloc[i]))))
             plt.close()
 
     dset.data_df['pred'] = preds
@@ -606,8 +670,8 @@ def train_cnn(train_loader,
     total_batches = len(train_loader)
     it_start = global_state['it']
     it_last = it_start + total_batches
-    for global_state['it'], mb in tqdm(enumerate(
-            train_loader, global_state['it'] + 1), desc='train', total=total_batches):
+    for global_state['it'], mb in tqdm(
+            enumerate(train_loader, global_state['it'] + 1), desc='train', total=total_batches):
 
         it = global_state['it']
 
@@ -635,7 +699,7 @@ def train_cnn(train_loader,
             logging.error(msg)
             raise TrainingBlowupError(msg)
 
-        validated = False  # when doing grad accum, don't print validation results twice
+        validated = False  # when doing grad accum, don't print the same validation results twice
         for i in range(it - num_acc + 1, it + 1):
             if not validated and ((eval_every == 0 and i == it_last) or (eval_every > 0 and i % eval_every == 0)):
                 if  global_state['args'].cuda > 0:
@@ -655,7 +719,7 @@ def train_cnn(train_loader,
             iou = get_latest_log('valid_avg_iou', float('nan'))[0]
             l = get_latest_log('valid_avg_loss', float('nan'))[0]
 
-            if  (print_every == 0 and i == it_last) or (print_every > 0 and i % print_every == 0):
+            if (print_every == 0 and i == it_last) or (print_every > 0 and i % print_every == 0):
 
                 logging.info('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f\tvalid iou: %.3f\tlr: %g' %
                     (epoch, i, train_loss, l, iou, global_state['lr']))
@@ -680,17 +744,17 @@ def train_cnn(train_loader,
                 save_checkpoint(
                     get_checkpoint_file(global_state['args']), model, optimizer, global_state, is_best)
 
-        for k,v in stats_train.items():
+        for k, v in stats_train.items():
             insert_log(it, 'train_last_%s' % k, v.last)
 
     time_end = time.time()
     time_total = time_end - time_start
     stats_train.update('time', time_total)
 
-    for k,v in stats_train.items():
+    for k, v in stats_train.items():
         insert_log(it, 'train_avg_%s' % k, v.avg)
         insert_log(it, 'train_std_%s' % k, v.std)
-    for k,v in stats_valid.items():
+    for k, v in stats_valid.items():
         insert_log(it, 'valid_avg_%s' % k, v.avg)
         insert_log(it, 'valid_std_%s' % k, v.std)
 
@@ -747,59 +811,10 @@ def epoch_logging_message(global_state, targets, stats_train, stats_valid, len_t
 
         msg += '\tepoch time=%d\tval time=%d\t sec/ex=%.3g\t train sec/ex=%.3g\tvalid sec/ex=%.3g' % (time_total, time_val, 1.0 * time_total / len_train, 1.0 * (time_total - time_val) / len_train, 1.0 * time_val / (n_val * len_valid) if n_val * len_valid > 0 else 0.0)
 
-    if  global_state['args'].cuda > 0 and stats_train['gpu_mem'].count > 0:
+    if global_state['args'].cuda > 0 and stats_train['gpu_mem'].count > 0:
         msg += '\tgpu_mem=%d' % stats_train['gpu_mem'].avg
 
     return msg
-
-
-def init_cuda(benchmark):
-    if not torch.cuda.is_available():
-        raise ValueError('cuda requested, but not available')
-
-    # uses the inbuilt cudnn auto-tuner to find the fastest convolution algorithms.
-    # note: actually makes it a lot slower on this problem!
-    torch.backends.cudnn.benchmark = benchmark
-    torch.backends.cudnn.enabled = True
-
-    global dev
-    def dev(x): return x.cuda()
-
-    print '\tset cuda environment'
-    print '\t\ttorch.__version__              =', torch.__version__
-    print '\t\ttorch.version.cuda             =', torch.version.cuda
-    print '\t\ttorch.backends.cudnn.version() =', torch.backends.cudnn.version()
-    try:
-        NUM_CUDA_DEVICES = len(
-            os.environ['CUDA_VISIBLE_DEVICES'].split(','))
-        print '\t\tos[\'CUDA_VISIBLE_DEVICES\']  =', os.environ['CUDA_VISIBLE_DEVICES']
-    except Exception:
-        print '\t\tos[\'CUDA_VISIBLE_DEVICES\']  =', 'None'
-        NUM_CUDA_DEVICES = 1
-
-    print '\t\ttorch.cuda.device_count()   =', torch.cuda.device_count()
-    print '\t\ttorch.cuda.current_device() =', torch.cuda.current_device()
-
-
-# https://stackoverflow.com/questions/49595663/find-a-gpu-with-enough-memory
-def get_gpu_used_memory():
-    """Get the current gpu usage.
-
-    Returns
-    -------
-    usage: dict
-        Keys are device ids as integers.
-        Values are memory usage as integers in MB.
-    """
-    result = subprocess.check_output(
-        [
-            'nvidia-smi', '--query-gpu=memory.used',
-            '--format=csv,nounits,noheader'
-        ])
-    # Convert lines into a dictionary
-    gpu_memory = [int(x) for x in result.strip().split('\n')]
-    gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
-    return gpu_memory_map[torch.cuda.current_device()]
 
 
 def parse_targets(args):
@@ -828,10 +843,10 @@ def parse_targets(args):
             raise ValueError('invalid target specification: %s' % spec)
 
         targets.append(
-            {'name' : parts[0],
-             'col' : parts[1],
-             'crit' : make_criterion(args),
-             'w_crit' : w_crit,
+            {'name': parts[0],
+             'col': parts[1],
+             'crit': make_criterion(args),
+             'w_crit': w_crit,
              'w_class': w_class})
 
     # normalize weights
@@ -842,69 +857,64 @@ def parse_targets(args):
     return targets
 
 def main():
-    parser = configargparse.ArgumentParser( description='training and testing of NN model.')
-    parser.add( '--config', '-c', default='default.cfg', is_config_file=True, help='config file path [default: %(default)s])')
-    parser.add( '--model', help='cnn/knn', choices=[ 'knn', 'cnn'], required=True, default="")
-
-        # parser.add('--arch', '-a', metavar='ARCH', default='resnet18',
-        #                                        choices=model_names,
-        #                                        help='model architecture: ' +
-        #                                            ' | '.join(model_names) +
-        #                                            ' (default: resnet18)')
+    parser = configargparse.ArgumentParser(description='training and testing of NN model.')
+    parser.add('--config', '-c', default='default.cfg', is_config_file=True, help='config file path [default: %(default)s])')
+    parser.add('--model', help='cnn/knn', choices=['knn', 'cnn'], required=True, default="")
+    parser.add('--arch', '-a', metavar='ARCH', default='unet', choices=['simple', 'unet'], help='model architecture [default: %(default)s]')
     parser.add('--experiment', '-e', required=True, help='experiment name')
     parser.add('--out-dir', '-o', help='output directory')
-    parser.add('--resume', type=str, metavar='PATH', help='path to latest checkpoint')
-    parser.add( '--override-model-opts', type=csv_list, default='override-model-opts,resume,experiment,out-dir,save-every,print-every,eval-every,scheduler,log-file,do,stop-instance-after,tta', help='when resuming, change these options [default: %(default)s]')
+    parser.add('--resume', metavar='PATH', help='path to latest checkpoint')
+    parser.add('--override-model-opts', type=csv_list, default='override-model-opts,resume,experiment,out-dir,save-every,print-every,eval-every,scheduler,log-file,do,stop-instance-after,tta', help='when resuming from a checkpoint file, change these options [default: %(default)s]')
     parser.add('--force-overwrite', type=int, default=0, help='overwrite existing checkpoint, if it exists [default: %(default)s]')
-    parser.add( '--do', choices=('train','score','submit','baseline'), default='train', help='mode of operation. score: compute losses and iou over training and validation sets. submit: write output files with run-length encoded predictions. baseline: compute losses with global average as prediction [default: %(default)s]')
-    parser.add( '--predictions-file', type=str, help='file name for predictions output')
-    parser.add( '--tta', type=int, default=0, help='apply test time augmentation')
+    parser.add('--do', choices=('train', 'score', 'submit', 'baseline'), default='train', help='mode of operation. score: compute losses and iou over training and validation sets. submit: write output files with run-length encoded predictions. baseline: compute losses with global average as prediction [default: %(default)s]')
+    parser.add('--predictions-file', help='file name for predictions output')
+    parser.add('--tta', type=int, default=0, help='apply test time augmentation')
     parser.add('--data', '-d', metavar='DIR', required=True, help='path to dataset')
     parser.add('--stage', '-s', default='stage1', help='stage [default: %(default)s]')
     parser.add('--group', '-g', default='train', help='group name [default: %(default)s]')
     parser.add('--train-img-size', type=int_list, default='192,192', help='image size to used during training [default: %(default)s]')
-    parser.add('--train-img-size-mode', choices=['crop', 'resize', 'keep'], default='crop', help='resize or crop training images to obtain consistent sizes [default: %(default)s]')
-    parser.add('--valid-fraction', '-v', default=0.25, type=float, help='validation set fraction [default: %(default)s]')
-    parser.add( '--stratify', type=int, default=1, help='stratify train/test split according to image size [default: %(default)s]')
-    parser.add('--epochs', default=1, type=int, metavar='N', help='number of total epochs to run [default: %(default)s]')
-    parser.add('-b', '--batch-size', default=1, type=int, metavar='N', help='mini-batch size [default: %(default)s]')
-    parser.add( '--grad-accum', default=1, type=int, metavar='N', help='number of batches between gradient descent [default: %(default)s]')
-    parser.add('--init-weight', default='kaiming', choices=['kaiming', 'xavier', 'default'], help='weight initialization method default: %(default)s]')
-    parser.add('--init-output-bias', default='', type=float_dict, help='initialize biases of output layers to match average value, in the form <target name1>:<value1>,<target name2>:<value2>,... ')
-    parser.add( '--input-field', type=str, default='images_prep', help='dataset field to pass to model as input [default: %(default)s]')
-    parser.add( '--targets', type=csv_list, default='seg:masks_prep_bin:1.0:1.0', help='one or multiple targets, as comma-delimited list of: <name>:<dataset field>:<target_weight>:<class_weight>. class_weight is a weight multiplier for non-zero mask pixels. <target_weight> and <class_weight> are optional. For multiple targets, model is expected to return dictionary of target names [default: %(default)s]')
-    parser.add( '--criterion', '-C', default='bce', choices=[ 'mse', 'bce', 'jaccard', 'dice'], help='type of loss function [default: %(default)s]')
-    parser.add( '--instance-weights', type=str,  metavar='W', help='use this dataset column as instance weights during training [default: %(default)s]')
-    parser.add('--weight-decay', default=1e-4, type=float, metavar='W', help='weight decay [default: %(default)s]')
-    parser.add( '--optim', '-O', default='adam', choices=[ 'sgd', 'adam', 'lbfgs'], help='optimization algorithm [default: %(default)s]')
-    parser.add( '--lr', '--learning-rate', default=0.001, type=float, metavar='LR', help='initial learning rate [default: %(default)s]')
-    parser.add('--momentum', '-m', default=0.9, type=float, metavar='M', help='momentum [default: %(default)s]')
-    parser.add('--history-size', type=int, default=100, help='history size for lbfgs [default: %(default)s]')
-    parser.add('--max-iter-lbfgs', type=int, default=20, help='maximum iterations for lbfgs [default: %(default)s]')
-    parser.add( '--tolerance-change', type=float, default=0.01, help='tolerance for termination for lbfgs [default: %(default)s]')
-    parser.add( '--scheduler', default='none', choices=[ 'none', 'plateau', 'exp', 'multistep'], help='learn rate scheduler [default: %(default)s]')
-    parser.add('--lr-decay', default=.1, type=float, metavar='N', help='decay factor for lr scheduler [default: %(default)s]')
-    parser.add('--min-lr', default=0.0001, type=float, metavar='N', help='minimum learn rate for scheduler [default: %(default)s]')
-    parser.add( '--patience', default=3, type=int, metavar='N', help='patience for lr scheduler, in epochs [default: %(default)s]')
-    parser.add('--cooldown', default=5, type=int, metavar='N', help='cooldown for lr scheduler [default: %(default)s]')
-    parser.add( '--patience-threshold', default=.1, type=float, metavar='N', help='patience threshold for lr scheduler [default: %(default)s]')
-    parser.add( '--scheduler_milestones', type=int_list, default='200', help='list of epoch milestones for multistep scheduler')
-    parser.add( '--switch-to-lbfgs', default=0, type=int, metavar='N', help='if lr scheduler reduces rate, switch to lbfgs [default: %(default)s]')
-    parser.add( '--clip-gradient', default=0.25, type=float, metavar='C', help='clip excessive gradients during training [default: %(default)s]')
-    parser.add('--print-every', '-p', default=0, type=int, metavar='N', help='print frequency. if 0, print after each epoch [default: %(default)s]')
-    parser.add('--save-every', '-S', default=0, type=int, metavar='N', help='save frequency. if 0, save after each epoch [default: %(default)s]')
-    parser.add('--eval-every', default=0, type=int, metavar='N', help='eval frequency. if 0, eval after each epoch [default: %(default)s]')
+    parser.add('--train-img-size-mode', choices=('crop', 'resize', 'keep'), default='crop', help='resize or crop training images to obtain consistent sizes [default: %(default)s]')
+    parser.add('--valid-fraction', '-v', type=float, default=0.25, help='validation set fraction [default: %(default)s]')
+    parser.add('--stratify', type=int, default=1, help='stratify train/test split according to image size [default: %(default)s]')
+    parser.add('--epochs', metavar='N', type=int, default=1, help='number of total epochs to run [default: %(default)s]')
+    parser.add('--batch-size', '-b', metavar='N', type=int, default=1, help='mini-batch size [default: %(default)s]')
+    parser.add('--grad-accum', metavar='N', type=int, default=1, help='number of batches between gradient descent [default: %(default)s]')
+    parser.add('--weight-init-method', default='kaiming', choices=('kaiming', 'xavier', 'default'), help='weight initialization method default: %(default)s]')
+    parser.add('--init-output-bias', type=float_dict, help='initialize biases of output layers to match average value, in the form <target name1>:<value1>,<target name2>:<value2>, default='',... ')
+    parser.add('--input-field', default='images_prep', help='dataset field to pass to model as input [default: %(default)s]')
+    parser.add('--targets', type=csv_list, default='seg:masks_prep_bin:1.0:1.0', help='one or multiple targets, as comma-delimited list of: <name>:<dataset field>:<target_weight>:<class_weight>. class_weight is a weight multiplier for non-zero mask pixels. <target_weight> and <class_weight> are optional. For multiple targets, model is expected to return dictionary of target names [default: %(default)s]')
+    parser.add('--criterion', '-C', default='bce', choices=('mse', 'bce', 'jaccard', 'dice'), help='type of loss function [default: %(default)s]')
+    parser.add('--instance-weights', metavar='W', help='use this dataset column as instance weights during training [default: %(default)s]')
+    parser.add('--weight-decay', metavar='W', type=float, default=1e-4, help='weight decay [default: %(default)s]')
+    parser.add('--optim', '-O', choices=('sgd', 'adam', 'lbfgs'), default='adam', help='optimization algorithm [default: %(default)s]')
+    parser.add('--lr', '--learning-rate', metavar='LR', type=float, default=0.001, help='initial learning rate [default: %(default)s]')
+    parser.add('--momentum', '-m', metavar='M', type=float, default=0.9, help='momentum [default: %(default)s]')
+    parser.add('--lbfgs-history-size', type=int, default=100, help='history size for lbfgs [default: %(default)s]')
+    parser.add('--lbfgs-max-iter', type=int, default=20, help='maximum iterations for lbfgs [default: %(default)s]')
+    parser.add('--lbfgs-tolerance-change', type=float, default=0.01, help='tolerance for termination for lbfgs [default: %(default)s]')
+    parser.add('--scheduler', default='none', choices=('none', 'plateau', 'exp', 'multistep'), help='learn rate scheduler [default: %(default)s]')
+    parser.add('--lr-decay', metavar='N', type=float, default=.1, help='decay factor for lr scheduler [default: %(default)s]')
+    parser.add('--min-lr', metavar='N', type=float, default=0.00001, help='minimum learn rate for scheduler [default: %(default)s]')
+    parser.add('--patience', metavar='N', type=int, default=3, help='patience for lr scheduler, in epochs [default: %(default)s]')
+    parser.add('--cooldown', metavar='N', type=int, default=5, help='cooldown for lr scheduler [default: %(default)s]')
+    parser.add('--patience-threshold', metavar='N', type=float, default=.1, help='patience threshold for lr scheduler [default: %(default)s]')
+    parser.add('--scheduler_milestones', type=int_list, default='200', help='list of epoch milestones for multistep scheduler')
+    parser.add('--switch-to-lbfgs', metavar='N', type=int, default=0, help='after plateau scheduler has reached minimum learn rate, switch to lbfgs [default: %(default)s]')
+    parser.add('--clip-gradient', metavar='C', type=float, default=0.25, help='clip excessive gradients during training [default: %(default)s]')
+    parser.add('--print-every', '-p', metavar='N', type=int, default=0, help='print frequency. if 0, print after each epoch [default: %(default)s]')
+    parser.add('--save-every', '-S', metavar='N', type=int, default=0, help='save frequency. if 0, save after each epoch [default: %(default)s]')
+    parser.add('--eval-every', metavar='N', type=int, default=0, help='eval frequency. if 0, eval after each epoch [default: %(default)s]')
     parser.add('--random-seed', type=int, default=2018, help='set random number generator seed [default: %(default)s]')
     parser.add('--verbose', '-V', type=int, default=0, help='verbose logging')
     parser.add('--log-file', help='write logging output to file')
-    parser.add('-j', '--workers', default=1, type=int, metavar='N', help='number of data loader workers [default: %(default)s]')
+    parser.add('--workers', metavar='N', type=int, default=1, help='number of data loader workers [default: %(default)s]')
     parser.add('--cuda', type=int, default=0, help='use cuda [default: %(default)s]')
-    parser.add( '--cuda-benchmark', type=int, default=0, help='use cuda benchmark mode [default: %(default)s]')
-    parser.add('--stop-instance-after',metavar='SEC', type=int, default=2592000, help='when running on AWS, stop the instance after that many seconds (or at exit) [default: %(default)s]')
+    parser.add('--cuda-benchmark', type=int, default=0, help='use cuda benchmark mode [default: %(default)s]')
+    parser.add('--stop-instance-after', metavar='SEC', type=int, default=2592000, help='when running on EC2, stop the instance after that many seconds (or at exit) [default: %(default)s]')
 
     args = parser.parse_args()
 
-    # in overrides, replace '-' by '_', and check that it is indeed an option
+    # in overrides, replace '-' by '_', and check that indeed an option
     new_overrides = []
     for opt in args.override_model_opts:
         opt_new = opt.replace('-', '_')
@@ -917,7 +927,7 @@ def main():
         args.out_dir = 'experiments/%s' % args.experiment
     mkdir_p(args.out_dir)
 
-    # for later info, save the current configuration and source files
+    # for reproducibility, save the current configuration and source files
     if args.config is not None and os.path.isfile(args.config):
         shutil.copy(args.config, args.out_dir)
 
@@ -957,36 +967,18 @@ def main():
     # init cuda
 
     if args.cuda > 0:
-        init_cuda(args.cuda_benchmark>0)
+        init_cuda(args.cuda_benchmark > 0)
 
-    # create model
-
-    trainer = None
-    model = None
-    optimizer = None
-    if args.model == 'knn':
-        trainer = train_knn
-        model = KNN()
-
-    elif args.model == 'cnn':
-        trainer = train_cnn
-        #model = CNN(32)
-        #model = UNetClassify(layers=4, init_filters=16)
-        model = UNetClassifyMulti(targets, layers=4, init_filters=16)
-        if args.init_weight != 'default' or len(args.init_output_bias) > 0:
-            init_weights(model, args.init_weight, args.init_output_bias)
-        model = dev(model)
-    else:
-        raise ValueError("Only supported models are cnn or knn")
 
     # optionally resume from a checkpoint
+
+    trainer = train_cnn
+
     if args.do != 'train' and args.resume is None:
         raise ValueError('--resume must be specified')
 
     if args.resume is not None:
-        model = load_checkpoint(
-            checkpoint_file_from_dir(
-                args.resume), model, None, global_state)
+        model = load_checkpoint(checkpoint_file_from_dir(args.resume), None, None, global_state)
         # make sure args here is consistent with possibly updated
         # global_state['args']!
         args = global_state['args']
@@ -1006,6 +998,28 @@ def main():
                 ckpt_file)
         clear_log()
 
+        # create model
+
+        model = None
+        optimizer = None
+        if args.model == 'knn':
+            trainer = train_knn
+            model = KNN()
+
+        elif args.model == 'cnn':
+            trainer = train_cnn
+            if args.arch == 'simple':
+                model = CNNSimple(32)
+            else:
+                model = UNetClassifyMulti(targets, layers=4, init_filters=16)
+
+                if args.weight_init_method != 'default' or len(args.init_output_bias) > 0:
+                    init_weights(model, args.weight_init_method, args.init_output_bias)
+                    model = dev(model)
+        else:
+            raise ValueError("Only supported models are cnn or knn")
+
+
     logging.info('model:\n')
     logging.info(model)
     logging.info('number of parameters: %d\n' %
@@ -1023,14 +1037,14 @@ def main():
     elif args.optim == 'lbfgs':
         optimizer = optim.LBFGS(model.parameters(),
                                 lr=args.lr,
-                                max_iter=args.max_iter_lbfgs,
-                                history_size=args.history_size,
-                                tolerance_change=args.tolerance_change)
+                                max_iter=args.lbfgs_max_iter,
+                                history_size=args.lbfgs_history_size,
+                                tolerance_change=args.lbfgs_tolerance_change)
     else:
-        raise ValueError('unknown optimization: %s' % args.optim)
+        raise ValueError('unknown optimizer: %s' % args.optim)
 
 
-    # set up learn rate scheduler
+    # set up learning rate scheduler
 
     scheduler = None
     if args.scheduler == 'plateau':
@@ -1049,7 +1063,6 @@ def main():
                 'scheduler-milestones cannot be empty for multi-step')
         scheduler = MultiStepLR(optimizer, args.scheduler_milestones)
     elif args.scheduler == 'exp':
-        # dummy for now
         scheduler = LambdaLR(optimizer, lr_lambda=lambda epoch: args.lr_decay)
 
 
@@ -1076,34 +1089,21 @@ def main():
     logging.info('load time: %.1f\n' % t)
 
 
-    # which fields should the data loader return?
-
-    fields_test = [args.input_field]
-    fields_valid = [args.input_field]
-    for target in targets:
-        fields_valid.append(target['col'])
-    if not 'masks_prep' in fields_valid:
-        fields_valid.append('masks_prep') # for iou
-    fields_train = [x for x in fields_valid]
-    if args.instance_weights is not None:
-        fields_train.append(args.instance_weights)
-
     # make submission file
 
     if args.do == 'submit':
-        make_submission(dset, model, args)
-        return
+        return make_submission(dset, model, args)
 
 
     # split data
 
     batch_size_train = args.batch_size
     if args.do != 'train':
-        # originals have varying dimensions, but minibatching requires identical sizes
+        # original images have varying dimensions, but minibatching requires identical sizes
         batch_size_train = 1
     batch_size_valid = 1
     train_dset, valid_dset = dset.train_test_split(
-        test_size=args.valid_fraction, random_state=args.random_seed, shuffle=True, stratify=(args.stratify>0))
+        test_size = args.valid_fraction, random_state=args.random_seed, shuffle=True, stratify=(args.stratify>0))
 
     if args.do in ('score', 'baseline'):
         train_dset.dset_type = 'valid'
@@ -1117,6 +1117,18 @@ def main():
                                pin_memory=(args.cuda > 0), num_workers=args.workers)
 
     logging.info('train set size: %d; test set size: %d' % (len(train_dset), len(valid_dset)))
+
+
+    # which fields should the data loader return?
+
+    fields_valid = [args.input_field]
+    for target in targets:
+        fields_valid.append(target['col'])
+    if 'masks_prep' not in fields_valid:
+        fields_valid.append('masks_prep') # for iou
+    fields_train = [x for x in fields_valid]
+    if args.instance_weights is not None:
+        fields_train.append(args.instance_weights)
 
 
     # score data
@@ -1164,6 +1176,8 @@ def main():
 
             logging.info(msg)
 
+            it = global_state['it']
+
             # check for blowup
             epoch_loss = get_latest_log('train_avg_loss', 1e20)[0]
             if not math.isnan(last_epoch_loss) and epoch_loss > 100.0 * last_epoch_loss:
@@ -1173,7 +1187,7 @@ def main():
             last_epoch_loss = epoch_loss
 
             save_checkpoint(
-                get_checkpoint_file(global_state['args'], global_state['it']),
+                get_checkpoint_file(global_state['args'], it),
                 model,
                 optimizer,
                 global_state)
@@ -1182,14 +1196,14 @@ def main():
             # check elapsed time
             time_end = time.time()
             time_total = time_end - time_start
-            logging.info('[%d, %d] total running time: %d seconds' % (global_state['epoch'], global_state['it'], time_total))
+            logging.info('[%d, %d] total running time: %d seconds' % (global_state['epoch'], it, time_total))
             if time_total > args.stop_instance_after:
                 ret = stop_current_instance(False)
                 logging.info(ret)
                 return 0
 
             if global_state['args'].scheduler != 'none':
-                # note: different interface!
+                # note: different interface:
                 # ReduceLROnPlateau.step() takes metrics as argument,
                 # other schedulers take epoch number
                 if isinstance(scheduler, ReduceLROnPlateau2):
@@ -1200,37 +1214,36 @@ def main():
                 lr_new = get_learning_rate(optimizer)
                 lr_old = global_state['lr']
                 if lr_old != lr_new:
-                    if not args.switch_to_lbfgs or isinstance(
-                            optimizer, optim.LBFGS):
-                        logging.info(
-                            '[%d, %d]\tLR changed from %f to %f.' %
-                            (epoch, global_state['it'], lr_old, lr_new))
-                        global_state['lr'] = lr_new
-                    else:
-                        logging.info('[%d, %d]\tswitching to lbfgs' %
-                                     (epoch, global_state['it']))
-                        lr = 0.8
-                        optimizer = optim.LBFGS(
-                            model.parameters(),
-                            lr=lr,
-                            max_iter=args.max_iter_lbfgs,
-                            history_size=args.history_size,
-                            tolerance_change=args.tolerance_change)
-                        global_state['args'].grad_accum = len(train_loader)
-                        args.grad_accum = len(train_loader)
-                        global_state['args'].optim == 'lbfgs'
-                        args.optim = 'lbfgs'
-                        global_state['args'].clip_gradient = 1e20
-                        args.clip_gradient = 0
-                        global_state['args'].scheduler = 'plateau'
-                        args.scheduler = 'plateau'
-                        global_state['lr'] = lr
+                    logging.info(
+                        '[%d, %d]\tLR changed from %f to %f.' % (epoch, it, lr_old, lr_new))
+                    global_state['lr'] = lr_new
+                elif (args.switch_to_lbfgs and not isinstance(optimizer, optim.LBFGS)
+                      and isinstance(scheduler, ReduceLROnPlateau2)
+                      and scheduler.waiting_to_reduce and lr_old == args.min_lr):
+                    logging.info('[%d, %d]\tminimum learn rate reached, switching scheduler to lbfgs' %
+                                 (epoch, it))
+                    lr = 0.8
+                    optimizer = optim.LBFGS(
+                        model.parameters(),
+                        lr=lr,
+                        max_iter=args.lbfgs_max_iter,
+                        history_size=args.lbfgs_history_size,
+                        tolerance_change=args.lbfgs_tolerance_change)
+                    global_state['args'].grad_accum = len(train_loader)
+                    args.grad_accum = len(train_loader)
+                    global_state['args'].optim == 'lbfgs'
+                    args.optim = 'lbfgs'
+                    global_state['args'].clip_gradient = 1e20
+                    args.clip_gradient = 0
+                    global_state['args'].scheduler = 'plateau'
+                    args.scheduler = 'plateau'
+                    global_state['lr'] = lr
 
-                        scheduler = ReduceLROnPlateau2(optimizer,
-                                                       factor=0.9,
-                                                       patience=1,
-                                                       patience_threshold=0.1,
-                                                       min_lr=0.1, verbose=1)
+                    scheduler = ReduceLROnPlateau2(optimizer,
+                                                   factor=0.9,
+                                                   patience=1,
+                                                   patience_threshold=0.1,
+                                                   min_lr=0.1, verbose=1)
 
         except TrainingBlowupError:
             # numerical instability, try to recover
@@ -1259,15 +1272,15 @@ def main():
                 global_state['lr'] = lr
                 optimizer = optim.LBFGS(model.parameters(),
                                         lr=lr,
-                                        max_iter=args.max_iter_lbfgs,
-                                        history_size=args.history_size,
-                                        tolerance_change=args.tolerance_change)
+                                        max_iter=args.lbfgs_max_iter,
+                                        history_size=args.lbfgs_history_size,
+                                        tolerance_change=args.lbfgs_tolerance_change)
                 global_state['args'].grad_accum = len(train_loader)
                 args.grad_accum = len(train_loader)
-                global_state['args'].optim == 'lbfgs'
+                global_state['args'].optim = 'lbfgs'
                 args.optim = 'lbfgs'
                 global_state['args'].clip_gradient = 1e20
-                args.clip_gradient = 0
+                args.clip_gradient = 1e20
                 global_state['args'].scheduler = 'plateau'
                 args.scheduler = 'plateau'
 

@@ -19,6 +19,91 @@ from skimage.morphology import label
 import torch
 
 
+def strip_end(text, suffix):
+    if not text.endswith(suffix):
+        return text
+    return text[:len(text) - len(suffix)]
+
+
+# auxiliary classes for comma-delimited command line arguments
+def csv_list(init):
+    l = init.split(',')
+    l = [x.strip() for x in l if len(x)]
+    return l
+
+
+def int_list(init):
+    l = init.split(',')
+    l = [int(x.strip()) for x in l if len(x)]
+    return l
+
+
+def float_dict(init):
+    l = [x.strip() for x in init.split(',') if len(x)]
+    ret = {}
+    for x in l:
+        parts = x.split(':')
+        if len(parts) != 2:
+            raise ValueError('invalid specification: %s' % x)
+        try:
+            v = float(parts[1])
+            ret[parts[0].strip()] = v
+        except:
+            raise ValueError('invalid specification: %s' % x)
+    return ret
+
+
+def mkdir_p(path):
+    try:
+        os.makedirs(path)
+        return 0
+    except OSError as exc:  # Python >2.5
+        if exc.errno == errno.EEXIST and os.path.isdir(path):
+            return 1
+        else:
+            raise
+
+
+def init_logging(opts={}):
+    filename = None
+    if hasattr(opts, 'log_file') and opts.log_file:
+        # slight hack: dollar signs work if config file is read by shell, here we need to strip it
+        # another slight hack: sometimes HOSTNAME is not set
+        if 'HOSTNAME' not in os.environ.keys():
+            os.environ['HOSTNAME'] = socket.gethostname()
+        filename = opts.log_file.replace('$', '').format(**os.environ)
+    verbose = False
+    if hasattr(opts, 'verbose'):
+        verbose = opts.verbose > 0
+    logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO, format="[%(asctime)s\t%(process)d\t%(levelname)s]\t%(message\
+)s", datefmt="%Y%m%d %H:%M:%S", filename=filename)
+
+
+# https://stackoverflow.com/questions/394770/override-a-method-at-instance-level
+
+
+def monkeypatch(obj, fn_name, new_fn):
+    fn = getattr(obj, fn_name)
+    funcType = type(fn)
+    setattr(obj, fn_name, funcType(new_fn, fn_name, obj.__class__))
+
+# Example:
+# class Dog():
+#    def bark(self):
+#       print "Woof"
+
+# def new_bark(self):
+#    print "Woof Woof"
+
+#foo = Dog()
+# foo.bark()
+#
+#
+#monkeypatch(foo, 'bark', new_bark)
+#
+# foo.bark()
+
+
 def as_py_scalar(x):
     if isinstance(x, torch.autograd.Variable):
         x = x.data
@@ -69,6 +154,8 @@ def exceptions_str():
         sys.exc_info()[0], sys.exc_info()[1])[0].strip()
 
 
+##### storing and accessing stats history
+
 LOG = []
 
 def clear_log():
@@ -87,8 +174,6 @@ def set_the_log(l):
 
 
 def insert_log(it, k, v, log=None):
-    #logging.info('INSERT %s %s %s %s' % (it, k, v, type(v)))
-
     global LOG
     if log is None:
         if LOG is None:
@@ -194,90 +279,6 @@ def checkpoint_file_from_dir(fname):
     if not os.path.isfile(guess):
         raise ValueError('checkpoint not found: %s', fname)
     return guess
-
-
-def init_logging(opts={}):
-    filename = None
-    if hasattr(opts, 'log_file') and opts.log_file:
-        # slight hack: dollar signs work if config file is read by shell, here we need to strip it
-        # another slight hack: sometimes HOSTNAME is not set
-        if 'HOSTNAME' not in os.environ.keys():
-            os.environ['HOSTNAME'] = socket.gethostname()
-        filename = opts.log_file.replace('$', '').format(**os.environ)
-    verbose = False
-    if hasattr(opts, 'verbose'):
-        verbose = opts.verbose > 0
-    logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO, format="[%(asctime)s\t%(process)d\t%(levelname)s]\t%(message\
-)s", datefmt="%Y%m%d %H:%M:%S", filename=filename)
-
-
-def strip_end(text, suffix):
-    if not text.endswith(suffix):
-        return text
-    return text[:len(text) - len(suffix)]
-
-
-# auxiliary class for comma-delimited command line arguments
-def csv_list(init):
-    l = init.split(',')
-    l = [x.strip() for x in l if len(x)]
-    return l
-
-
-def int_list(init):
-    l = init.split(',')
-    l = [int(x.strip()) for x in l if len(x)]
-    return l
-
-
-def float_dict(init):
-    l = [x.strip() for x in init.split(',') if len(x)]
-    ret = {}
-    for x in l:
-        parts = x.split(':')
-        if len(parts) != 2:
-            raise ValueError('invalid specification: %s' % x)
-        try:
-            v = float(parts[1])
-            ret[parts[0].strip()] = v
-        except:
-            raise ValueError('invalid specification: %s' % x)
-    return ret
-
-
-def mkdir_p(path):
-    try:
-        os.makedirs(path)
-        return 0
-    except OSError as exc:  # Python >2.5
-        if exc.errno == errno.EEXIST and os.path.isdir(path):
-            return 1
-        else:
-            raise
-
-# https://stackoverflow.com/questions/394770/override-a-method-at-instance-level
-
-
-def monkeypatch(obj, fn_name, new_fn):
-    fn = getattr(obj, fn_name)
-    funcType = type(fn)
-    setattr(obj, fn_name, funcType(new_fn, fn_name, obj.__class__))
-
-# Example:
-# class Dog():
-#    def bark(self):
-#       print "Woof"
-
-# def new_bark(self):
-#    print "Woof Woof"
-
-#foo = Dog()
-# foo.bark()
-#
-#
-#monkeypatch(foo, 'bark', new_bark)
-#
-# foo.bark()
 
 
 # RLE encoding

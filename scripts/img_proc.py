@@ -233,7 +233,6 @@ def noop_augmentation():
 # iaa.PiecewiseAffine(scale=(0.00, 0.06))
 
 def affine_augmentation(crop_size):
-    print 'crop', crop_size
     seq = iaa.SomeOf((1, 2),
                      [iaa.Fliplr(0.5),
                       iaa.Flipud(0.5),
