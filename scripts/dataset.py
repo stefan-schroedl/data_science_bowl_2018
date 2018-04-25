@@ -12,17 +12,13 @@ from torch.utils.data import Dataset
 
 from PIL import Image
 
-from skimage import img_as_ubyte
 from skimage.io import imread
-from skimage.color import rgb2grey
 
 from sklearn.model_selection import train_test_split as train_test_split_sk
 
-import cv2
-
 from tqdm import tqdm
 
-from img_proc import numpy_img_to_torch, binarize, noop_augmentation, nuc_augmentation, affine_augmentation, color_augmentation, preprocess_img, preprocess_mask, get_contour
+from img_proc import numpy_img_to_torch, binarize, noop_augmentation, affine_augmentation, color_augmentation, preprocess_img, preprocess_mask, get_contour
 
 
 class NucleusDataset(Dataset):
@@ -48,18 +44,9 @@ class NucleusDataset(Dataset):
     def read_and_stack(in_img_list):
         return np.sum(np.stack([i * (imread(c_img) > 0)
                                 for i, c_img in enumerate(in_img_list, 1)], 0), 0)
-        # r = (reduce(
-        #        np.bitwise_or, [
-        #            np.asarray(Image.open(c_img)) for c_img in iter(in_img_list)])).astype(np.uint8)
-        #r = r / r.max()
-        # return r
-
 
     @staticmethod
     def read_image(in_img_list):
-        #img = img_as_float(rgb2hsv(rgba2rgb(io.imread(in_img_list[0]))))
-        # img = cv2.imread(in_img_list[0])[:,:,1] # as done in ali's pipeline
-        # return img, img.shape
         img = Image.open(in_img_list[0])
         return np.array(img.convert('RGB')), img.size
 
@@ -81,14 +68,17 @@ class NucleusDataset(Dataset):
         self.is_preprocessed = False
 
         if value == 'train':
-            self.augment = affine_augmentation(self.crop_size)
+            sz = None
+            if self.img_size is not None and self.img_size_mode == 'resize':
+                sz = self.img_size
+            self.augment = affine_augmentation(sz)
             self.augment_color = color_augmentation()
         else:
             self.augment = noop_augmentation()
             self.augment_color = noop_augmentation()
 
 
-    def __init__(self, root_dir=None, stage_name=None, group_name=None, dset_type='train', crop_size=None):
+    def __init__(self, root_dir=None, stage_name=None, group_name=None, dset_type='train', img_size=None, img_size_mode=None):
         """
         Read all images and masks into memory.
 
@@ -99,11 +89,22 @@ class NucleusDataset(Dataset):
             root_dir (string): directory with all the images.
             stage_name (string): stage of data
             group_name (string): typically 'train' or 'test'. No masks are available for 'test'.
-            dset_type: dataset mode, either 'train', 'valid', or 'test'.
+            dset_type (string): dataset mode, either 'train', 'valid', or 'test'.
+            img_size (int pair): desired size of images. For minibatches > 1, sizes must agree.
+            img_size_mode (string): one of 'resize', 'crop', or 'keep'. Resizing is done during initial preparation.
+                                    cropping is part of augmentation pipeline.
         """
 
         self.root_dir = root_dir
-        self.crop_size = crop_size
+
+        self.img_size = img_size
+        if img_size_mode is None:
+            if img_size is None:
+                img_size_mode = 'keep'
+            else:
+                img_size_mode = 'crop'
+        self.img_size_mode = img_size_mode
+
         self.dset_type = dset_type
         self.is_preprocessed = False
 
@@ -164,21 +165,25 @@ class NucleusDataset(Dataset):
 
     def preprocess(self):
 
-        imgs_prep = []      # preprocessed input images
-        masks_bin = []      # binarized masks
-        masks_prep = []     # preprocesed masks
-        masks_prep_bin = [] # binarized preprocessed masks
-        contours = []       # contours on the eroded mask for multi-task
-        inst_wt = []        # instance weights, 1 / (#nuclei + 1), used as instance weight
+        imgs_prep = []       # preprocessed input images
+        masks_bin = []       # binarized masks
+        masks_prep = []      # preprocesed masks
+        masks_prep_bin = []  # binarized preprocessed masks
+        contours = []        # contours on the eroded mask for multi-task
+        inst_wt = []         # instance weights, 1 / (#nuclei + 1), used as instance weight
+
+        sz = None
+        if self.img_size is not None and self.img_size_mode == 'resize':
+            sz = self.img_size
 
         for i in tqdm(range(len(self.data_df)), desc='prep ' + self.dset_type):
 
             img = self.data_df['images'].iloc[i]
-            imgs_prep.append(preprocess_img(img, self.dset_type))
+            imgs_prep.append(preprocess_img(img, sz))
 
             if (self.dset_type != 'test'):
                 m = self.data_df['masks'].iloc[i]
-                prep = preprocess_mask(m, self.dset_type)
+                prep = preprocess_mask(m, self.dset_type, sz)
 
                 masks_prep.append(prep)
                 masks_bin.append(binarize(m))
@@ -260,7 +265,7 @@ class NucleusDataset(Dataset):
         """
 
         if 'stratify' in options:
-            if options['stratify'] == False:
+            if not options['stratify']:
                 del options['stratify']
             else:
                 # stratify by image size.
@@ -277,10 +282,11 @@ class NucleusDataset(Dataset):
                 options['stratify'] = self.data_df['images'].map(lambda x: '{}'.format(x.size))
 
         df_train, df_valid = train_test_split_sk(self.data_df, **options)
-        dset_train = NucleusDataset(dset_type='train', crop_size=self.crop_size)
+        dset_train = NucleusDataset(dset_type='train', img_size=self.img_size, img_size_mode=self.img_size_mode)
         dset_train.data_df = df_train
 
-        dset_valid = NucleusDataset(dset_type='valid', crop_size=self.crop_size)
+        # validation images should never be resized or cropped
+        dset_valid = NucleusDataset(dset_type='valid', img_size=None, img_size_mode='keep')
         dset_valid.data_df = df_valid
 
         return dset_train, dset_valid

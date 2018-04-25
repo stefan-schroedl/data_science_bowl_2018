@@ -5,6 +5,8 @@ import imgaug as ia
 
 class FiveCrop(ia.augmenters.Augmenter):
 
+    """Subclass of img_aug.Augmenter to randomly crop one of the corners or the center"""
+
     def __init__(self, size, name=None, deterministic=False, random_state=None):
         super(FiveCrop, self).__init__(name=name, deterministic=deterministic, random_state=random_state)
         if ia.is_single_integer(size):
@@ -16,8 +18,10 @@ class FiveCrop(ia.augmenters.Augmenter):
 
         self.choice = ia.parameters.DiscreteUniform(0, 4)
 
+
     def get_parameters(self):
         return [self.size, self.interpolation]
+
 
     def center_crop(self, img, output_size):
 
@@ -27,6 +31,7 @@ class FiveCrop(ia.augmenters.Augmenter):
         i = int(round((h - th) / 2.))
         j = int(round((w - tw) / 2.))
         return img[i:(i+th), j:(j+tw)]
+
 
     def _augment_images(self, images, random_state, parents, hooks):
         result = []
@@ -64,6 +69,7 @@ class FiveCrop(ia.augmenters.Augmenter):
 
         return result
 
+
     def _augment_keypoints(self, keypoints_on_images, random_state, parents, hooks):
         result = []
         nb_images = len(keypoints_on_images)
@@ -93,7 +99,3 @@ class FiveCrop(ia.augmenters.Augmenter):
             result.append(shifted)
 
         return result
-
-
-if __name__ == '__main__':
-    aug = FiveCrop((128, 128))
