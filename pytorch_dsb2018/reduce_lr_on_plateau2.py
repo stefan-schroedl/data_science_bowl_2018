@@ -149,7 +149,6 @@ class ReduceLROnPlateau2(object):
         if not self.waiting_to_reduce and self.num_bad_epochs > self.patience:
             self.waiting_to_reduce = True
             if self.verbose:
-                #logging.info('Epoch {:5d}: ran out of patience, waiting to reduce lr'.format(epoch))
                 logging.info('[epoch {:5d}] scheduler: ran out of patience, wating to reduce lr'.format(epoch))
 
         if self.waiting_to_reduce and self.is_acceptable_degradation(current, self.best, self.worst_after_best):

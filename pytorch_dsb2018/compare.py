@@ -8,8 +8,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 
-from utils import get_log, list_log_keys, csv_list, moving_average, checkpoint_file_from_dir
-import architectures
+from utils import csv_list, moving_average, checkpoint_file_from_dir
+from metrics_log import get_log, list_log_keys
 
 
 def filter_hist(h, min_it, max_it, min_y, max_y):
@@ -68,7 +68,6 @@ parser.add('--list-keys', '-l', default=0, type=int, help='show keys stored in l
 
 args = parser.parse_args()
 
-model = architectures.CNN()
 tr = []
 tr_f = []
 w = []

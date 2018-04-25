@@ -33,9 +33,8 @@ import cv2
 from meter import NamedMeter
 
 from img_proc import numpy_img_to_torch, torch_img_to_numpy, torch_flip, torch_rot90, postprocess_prediction
-from utils import mkdir_p, csv_list, int_list, float_dict, strip_end, init_logging, get_the_log, set_the_log, clear_log, insert_log, get_latest_log, get_log, labels_to_rles, get_latest_checkpoint_file, get_checkpoint_file, checkpoint_file_from_dir, moving_average, as_py_scalar, stop_current_instance, get_learning_rate
-
-from KNN import *
+from utils import mkdir_p, csv_list, int_list, float_dict, strip_end, init_logging, labels_to_rles, get_latest_checkpoint_file, get_checkpoint_file, checkpoint_file_from_dir, moving_average, as_py_scalar, stop_current_instance, get_learning_rate
+from metrics_log import get_the_log, set_the_log, clear_log, insert_log, get_latest_log, get_log
 
 from dataset import NucleusDataset
 
@@ -210,30 +209,6 @@ def load_checkpoint(fname,
         "=> loaded checkpoint '{}' (iteration {})\n".format(
             fname, it))
     return model
-
-
-def validate_knn(model, loader, criterion):
-    running_loss = 0.0
-    cnt = 0
-    for i, (img, (labels, labels_seg)) in tqdm(enumerate(loader), 'test'):
-        p_img, p_seg, p_boundary, p_blend = model.predict(img)
-        torch_p_seg = torch.from_numpy(
-            p_seg[None, :, :].astype(np.float) / 255).float()
-        #torch_p_boundary = torch.from_numpy(p_boundary[None,:,:].astype(np.float)/255).float()
-        #torch_p_blend = torch.from_numpy(p_blend[None,:,:].astype(np.float)/255).float()
-        border = np.full((p_img.shape[0], 5, 3), 255).astype(np.uint8)
-        cv2.imshow('img and reconstructed img', np.concatenate(
-            (torch_img_to_numpy(img), border, p_img), axis=1))
-        cv2.imshow('seg and reconstructed seg', np.concatenate(
-            (torch_img_to_numpy(labels_seg), border[:, :, :1], p_seg[:, :, None]), axis=1))
-        # cv2.imshow('pbound',p_boundary)
-        # cv2.imshow('pblend',p_blend)
-        cv2.waitKey(10)
-        loss = criterion(Variable(torch_p_seg), Variable(labels_seg.float()))
-        running_loss += loss.data[0]
-        cnt = cnt + 1
-    l = running_loss / cnt
-    return l
 
 
 def init_cuda(benchmark):
@@ -557,47 +532,7 @@ def make_submission(dset, model, args, pred_field_iou='seg'):
         args.predictions_file, index=False)
 
 
-def train_knn(
-        train_loader,
-        valid_loader,
-        model,
-        criterion,
-        optimizer,
-        scheduler,
-        epoch,
-        eval_every,
-        print_every,
-        save_every,
-        global_state):
-    running_loss = 0.0
-    cnt = 0
-    for global_state['it'], (img, (labels, labels_bin)) in tqdm(
-            enumerate(train_loader, global_state['it'] + 1)):
-        model.prepare_fit(img, labels, labels_bin)
-
-        cnt = cnt + 1
-
-        if cnt > 0 and global_state['it'] % eval_every == 0:
-            model.fit()
-            l = validate_knn(model, valid_loader, criterion)
-            img, mask, boundary, blend = model.predict(img)
-            insert_log(global_state['it'], 'train_loss', running_loss / cnt)
-            insert_log(global_state['it'], 'valid_loss', l)
-            running_loss = 0.0
-
-            if cnt > 0 and global_state['it'] % print_every == 0:
-                print('[%d, %d]\ttrain loss: %.3f\tvalid loss: %.3f' %
-                      (epoch, global_state['it'], stats[-1][1], stats[-1][2]))
-            if global_state['it'] % save_every == 0:
-                is_best = False
-                if global_state['best_loss'] > l:
-                    global_state['best_loss'] = l
-                    global_state['best_it'] = global_state['it']
-                    is_best = True
-    return global_state['it'], global_state['best_loss'], global_state['best_it']
-
-
-def train_cnn(train_loader,
+def train_epoch(train_loader,
               valid_loader,
               targets,
               model,
@@ -859,7 +794,6 @@ def parse_targets(args):
 def main():
     parser = configargparse.ArgumentParser(description='training and testing of NN model.')
     parser.add('--config', '-c', default='default.cfg', is_config_file=True, help='config file path [default: %(default)s])')
-    parser.add('--model', help='cnn/knn', choices=['knn', 'cnn'], required=True, default="")
     parser.add('--arch', '-a', metavar='ARCH', default='unet', choices=['simple', 'unet'], help='model architecture [default: %(default)s]')
     parser.add('--experiment', '-e', required=True, help='experiment name')
     parser.add('--out-dir', '-o', help='output directory')
@@ -972,8 +906,6 @@ def main():
 
     # optionally resume from a checkpoint
 
-    trainer = train_cnn
-
     if args.do != 'train' and args.resume is None:
         raise ValueError('--resume must be specified')
 
@@ -1000,24 +932,14 @@ def main():
 
         # create model
 
-        model = None
-        optimizer = None
-        if args.model == 'knn':
-            trainer = train_knn
-            model = KNN()
-
-        elif args.model == 'cnn':
-            trainer = train_cnn
-            if args.arch == 'simple':
-                model = CNNSimple(32)
-            else:
-                model = UNetClassifyMulti(targets, layers=4, init_filters=16)
-
-                if args.weight_init_method != 'default' or len(args.init_output_bias) > 0:
-                    init_weights(model, args.weight_init_method, args.init_output_bias)
-                    model = dev(model)
+        if args.arch == 'simple':
+            model = CNNSimple(32)
         else:
-            raise ValueError("Only supported models are cnn or knn")
+            model = UNetClassifyMulti(targets, layers=4, init_filters=16)
+
+        if args.weight_init_method != 'default' or len(args.init_output_bias) > 0:
+            init_weights(model, args.weight_init_method, args.init_output_bias)
+        model = dev(model)
 
 
     logging.info('model:\n')
@@ -1170,7 +1092,7 @@ def main():
     for global_state['epoch'] in range(global_state['epoch'] + 1, args.epochs):
         epoch = global_state['epoch']
         try:
-            stats_train, stats_valid = trainer(train_loader, valid_loader, targets, model, optimizer, scheduler, args.eval_every, args.print_every, args.save_every, global_state)
+            stats_train, stats_valid = train_epoch(train_loader, valid_loader, targets, model, optimizer, scheduler, args.eval_every, args.print_every, args.save_every, global_state)
 
             msg = epoch_logging_message(global_state, targets, stats_train, stats_valid, len(train_dset), len(valid_dset))
 
