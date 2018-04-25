@@ -1,0 +1,17 @@
+# How to install on EC2:
+# I started with the amazon deep learning AMI, which has cuda and pytorch installed already.
+# The following additions were needed:
+
+conda install configargparse
+conda install tqdm
+conda install scipy
+conda install matplotlib
+conda install scikit-learn
+pip install imgaug (not in anaconda?)
+conda install --channel https://conda.anaconda.org/menpo opencv3
+# cv2 led to some missing library failures, see
+# https://ubunifu.co/python/installing-libgtk-x11-2-0-so-0-in-amazon-linux-ami-2017-03-1
+sudo yum install ftp://ftp.riken.jp/Linux/centos/6/os/x86_64/Packages/hicolor-icon-theme-0.11-1.1.el6.noarch.rpm
+sudo yum install ftp://ftp.riken.jp/Linux/centos/6/os/x86_64/Packages/atk-1.30.0-1.el6.x86_64.rpm
+sudo yum install ftp://ftp.riken.jp/Linux/centos/6/os/x86_64/Packages/gdk-pixbuf2-2.24.1-6.el6_7.x86_64.rpm
+sudo yum install ftp://ftp.riken.jp/Linux/centos/6/os/x86_64/Packages/gtk2-2.24.23-9.el6.x86_64.rpm
